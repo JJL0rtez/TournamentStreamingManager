@@ -7,6 +7,8 @@ export interface RingAssignment {
   cameraName: string;
   microphoneName: string;
   ring: string;
+  audioSyncOffsetMs?: number;
+  overlay?: { imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number };
 }
 export interface TournamentSession {
   eventName: string;
@@ -91,8 +93,20 @@ export function setSession(input: unknown, createNewEvent = false): TournamentSe
     if (seenCameras.has(item.cameraId) || seenMicrophones.has(item.microphoneName) || seenRings.has(ring))
       throw new Error("Camera, microphone and ring assignments must be unique.");
     seenCameras.add(item.cameraId); seenMicrophones.add(item.microphoneName); seenRings.add(ring);
+    const audioSyncOffsetMs = item.audioSyncOffsetMs ?? -300;
+    if (typeof audioSyncOffsetMs !== "number" || !Number.isInteger(audioSyncOffsetMs) ||
+        audioSyncOffsetMs < -2000 || audioSyncOffsetMs > 2000)
+      throw new Error("Audio sync offset must be an integer between -2000 and 2000 ms.");
+    const overlay = item.overlay;
+    if (overlay !== undefined && (!overlay || typeof overlay !== "object" ||
+      !/^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg)$/i.test(overlay.imageId) ||
+      !["top-left", "top-right", "bottom-left", "bottom-right"].includes(overlay.position) ||
+      !Number.isInteger(overlay.offsetX) || !Number.isInteger(overlay.offsetY) ||
+      overlay.offsetX < -4096 || overlay.offsetX > 4096 || overlay.offsetY < -4096 || overlay.offsetY > 4096)) {
+      throw new Error("Invalid overlay settings.");
+    }
     return { cameraId: item.cameraId, cameraName: item.cameraName,
-      microphoneName: item.microphoneName, ring };
+      microphoneName: item.microphoneName, ring, audioSyncOffsetMs, ...(overlay ? { overlay } : {}) };
   });
   // Never trust an event ID from the client. Generate it on the server.
   const eventId = createNewEvent || !session ? randomUUID() : session.eventId;

@@ -1,3 +1,4 @@
+import { saveOverlayImage, getOverlayImage } from "./overlay-assets.js";
 import { summarizeCameraReliability } from "./camera-reliability-summary.js";
 import { readDiagnosticThresholds, saveDiagnosticThresholds } from "./diagnostic-thresholds.js";
 import { investigateRecordingFailures } from "./failure-investigation.js";
@@ -61,11 +62,24 @@ let sharedCaptureStarting = false;
 let sharedCaptureStopping = false;
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "8mb" }));
 installOperatorAuth(app);
 // Protect remote proxy writes too. Node token alone must not grant browser write privileges.
 app.use("/api", requireOperator);
 installRemoteNodeRoutes(app);
+// Overlay images are stored locally per node. Copy/import the image to each node that needs it.
+app.post("/api/overlays/images", (req, res) => {
+  try { res.json({ imageId: saveOverlayImage(req.body?.base64) }); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+app.get("/api/overlays/images/:imageId", (req, res) => {
+  try {
+    const imageId = String(req.params.imageId);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.type(imageId.endsWith(".png") ? "png" : "jpeg").send(getOverlayImage(imageId));
+  } catch { res.status(404).json({ error: "Overlay image not found on this node" }); }
+});
+
 
 const recordingManager = new RecordingManager();
 // Recorded sessions remain visible after a backend restart.

@@ -177,6 +177,8 @@ interface SessionAssignment {
   cameraName: string;
   microphoneName: string;
   ring: string;
+  audioSyncOffsetMs?: number;
+  overlay?: { imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number };
 }
 interface TournamentSession {
   eventId?: string;
@@ -3382,6 +3384,30 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [frameTick, setFrameTick] = useState(0);
   const [session, setSession] = useState<TournamentSession>({ eventName: "", assignments: [] });
   const [sessionBusy, setSessionBusy] = useState(false);
+  async function uploadOverlay(cameraId: string, file: File) {
+    if (!/image\/(png|jpeg)/.test(file.type) || file.size > 5 * 1024 * 1024) { setError("Overlay must be PNG or JPEG, up to 5 MB."); return; }
+    setError(null);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = () => reject(new Error("Could not read overlay image"));
+        reader.readAsDataURL(file);
+      });
+      const result: { imageId: string } = await requestNode("/api/overlays/images", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base64 })
+      });
+      setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === cameraId
+        ? { ...a, overlay: { imageId: result.imageId, position: a.overlay?.position ?? "top-right", offsetX: a.overlay?.offsetX ?? 20, offsetY: a.overlay?.offsetY ?? 20 } } : a) }));
+      setPreflight(null);
+    } catch (error) { setError(String(error)); }
+  }
+  function changeOverlay(cameraId: string, changes: Partial<NonNullable<SessionAssignment["overlay"]>>) {
+    setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === cameraId && a.overlay
+      ? { ...a, overlay: { ...a.overlay, ...changes } } : a) }));
+    setPreflight(null);
+  }
+
   const [availableEvents, setAvailableEvents] = useState<Array<{ eventId: string; eventName: string; assignmentCount: number }>>([]);
   const [eventToSelect, setEventToSelect] = useState("");
   const [templates, setTemplates] = useState<Array<{ templateId: string; name: string; eventName: string; assignmentCount: number }>>([]);
@@ -4409,9 +4435,49 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                   const ring = event.target.value;
                   return { ...old, assignments: ring ? [...rest, {
                     cameraId: camera.id, cameraName: camera.name,
-                    microphoneName: assignedMic, ring
+                    microphoneName: assignedMic, ring,
+                    audioSyncOffsetMs: old.assignments.find(item => item.cameraId === camera.id)?.audioSyncOffsetMs ?? -300,
+                    overlay: old.assignments.find(item => item.cameraId === camera.id)?.overlay
                   }] : rest };
                 })} />
+              {assignment && <span className="field">
+                <span>Audio sync offset (ms)</span>
+                <input type="number" min={-2000} max={2000} step={10}
+                  aria-label={`Audio sync offset for ${assignment.ring}`}
+                  value={assignment.audioSyncOffsetMs ?? -300}
+                  disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                  onChange={(event) => {
+                    const value = event.target.valueAsNumber;
+                    if (!Number.isInteger(value) || value < -2000 || value > 2000) return;
+                    setSession(old => ({ ...old, assignments: old.assignments.map(item =>
+                      item.cameraId === camera.id ? { ...item, audioSyncOffsetMs: value } : item) }));
+                    setPreflight(null);
+                  }} />
+                <small>Negative values advance audio; positive values delay it. Save Session to apply on the next recording.</small>
+              </span>}
+              {assignment && <div className="field" style={{ display: "grid", gap: 8 }}>
+                <strong>Image overlay</strong>
+                <input type="file" accept="image/png,image/jpeg" aria-label={`Overlay image for ${assignment.ring}`}
+                  disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                  onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, file); e.target.value = ""; }} />
+                {assignment.overlay && <>
+                  <img src={`/api/overlays/images/${encodeURIComponent(assignment.overlay.imageId)}`} alt="Overlay preview" style={{ maxWidth: 200, maxHeight: 100, objectFit: "contain" }} />
+                  <label>Position <select value={assignment.overlay.position} disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onChange={e => changeOverlay(camera.id, { position: e.target.value as NonNullable<SessionAssignment["overlay"]>["position"] })}>
+                    <option value="top-left">Top left</option><option value="top-right">Top right</option>
+                    <option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option>
+                  </select></label>
+                  <label>Horizontal offset (px) <input type="number" min={-4096} max={4096} step={1} value={assignment.overlay.offsetX}
+                    disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, { offsetX: e.target.valueAsNumber }); }} /></label>
+                  <label>Vertical offset (px) <input type="number" min={-4096} max={4096} step={1} value={assignment.overlay.offsetY}
+                    disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, { offsetY: e.target.valueAsNumber }); }} /></label>
+                  <button type="button" disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onClick={() => { setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === camera.id ? { ...a, overlay: undefined } : a) })); setPreflight(null); }}>Remove overlay</button>
+                </>}
+                <small>Positive offsets move inward from the selected corner. Save Session, then restart recording to apply. Image files live in config/overlays on this node.</small>
+              </div>}
             </label>;
           })}
         </div>

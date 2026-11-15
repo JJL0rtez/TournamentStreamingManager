@@ -28,6 +28,8 @@ export interface CameraCaptureConfig {
   inputHeight?: number;
   recordingBitrate?: string;
   streamingBitrate?: string;
+  audioSyncOffsetMs?: number;
+  overlay?: { imagePath: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number };
 }
 
 
@@ -75,6 +77,22 @@ onExit(listener: () => void): () => void {
     // Every recording uses a unique timestamped prefix. Existing files are never overwritten.
     this.recordingPath = outputPath.replace(/\.mkv$/, "_0000.mkv");
     this.segmentPattern = outputPath.replace(/\.mkv$/, "_%04d.mkv");
+
+    const audioSyncOffsetMs = config.audioSyncOffsetMs ?? -300;
+    const audioSyncFilter = `asetpts=PTS${audioSyncOffsetMs < 0 ? "-" : "+"}${Math.abs(audioSyncOffsetMs) / 1000}/TB`;
+
+    const overlay = config.overlay;
+    const overlayX = overlay ? (overlay.position.endsWith("right") ? `W-w-${overlay.offsetX}` : String(overlay.offsetX)) : "0";
+    const overlayY = overlay ? (overlay.position.startsWith("bottom") ? `H-h-${overlay.offsetY}` : String(overlay.offsetY)) : "0";
+    // Each video output gets its own filtered branch. Audio remains unchanged.
+    const overlayFilters = overlay ? [
+      "[0:v]split=3[recsrc][prevsrc][streamsrc]",
+      "[1:v]split=3[imgrec][imgprev][imgstream]",
+      `[recsrc][imgrec]overlay=x=${overlayX}:y=${overlayY}:shortest=0:eof_action=repeat[recvid]`,
+      `[prevsrc][imgprev]overlay=x=${overlayX}:y=${overlayY}:shortest=0:eof_action=repeat,fps=5,scale=640:360[prevvid]`,
+      `[streamsrc][imgstream]overlay=x=${overlayX}:y=${overlayY}:shortest=0:eof_action=repeat,fps=${streamFps}[streamvid]`
+    ].join(";") : null;
+
     const args = [
       "-hide_banner",
       "-loglevel", "error",
@@ -90,12 +108,14 @@ onExit(listener: () => void): () => void {
         config.cameraDeviceId
         ? `video=${config.cameraDeviceId}:audio=${config.microphoneName}`
         : `video=${config.cameraName}:audio=${config.microphoneName}`,
-      "-map", "0:v:0",
+      ...(overlay ? ["-loop", "1", "-framerate", "1", "-i", overlay.imagePath, "-filter_complex", overlayFilters!] : []),
+      "-map", overlay ? "[recvid]" : "0:v:0",
       "-map", "0:a:0",
       "-c:v", "h264_nvenc",
       "-preset", "p4",
       "-b:v", config.recordingBitrate || recordingBitrate,
       "-pix_fmt", "yuv420p",
+      "-af", audioSyncFilter,
       "-c:a", "aac",
       "-b:a", "192k",
       "-force_key_frames", "expr:gte(t,n_forced*300)",
@@ -105,17 +125,17 @@ onExit(listener: () => void): () => void {
       "-reset_timestamps", "1",
       this.segmentPattern,
 
-      "-map", "0:v:0",
-      "-vf", "fps=5,scale=640:360",
+      "-map", overlay ? "[prevvid]" : "0:v:0",
+      ...(!overlay ? ["-vf", "fps=5,scale=640:360"] : []),
       "-c:v", "mjpeg",
       "-f", "image2pipe",
       "pipe:1",
 
       // Separate H.264/AAC transport for independent YouTube relay.
       // Input is MJPEG, so stream copy would NOT produce YouTube-compatible H.264.
-      "-map", "0:v:0",
+      "-map", overlay ? "[streamvid]" : "0:v:0",
       "-map", "0:a:0",
-      "-vf", `fps=${streamFps}`,
+      ...(!overlay ? ["-vf", `fps=${streamFps}`] : []),
       "-c:v", "h264_nvenc",
       "-preset", "p4",
       "-b:v", config.streamingBitrate || streamingBitrate,
@@ -125,6 +145,7 @@ onExit(listener: () => void): () => void {
       "-keyint_min", "60",
       "-forced-idr", "1",
       "-pix_fmt", "yuv420p",
+      "-af", audioSyncFilter,
       "-c:a", "aac",
       "-b:a", "128k",
       "-f", "mpegts",

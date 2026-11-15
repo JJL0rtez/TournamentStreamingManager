@@ -1,3 +1,4 @@
+import { resolveOverlayImage } from "./overlay-assets.js";
 import { getCameraQuality } from "./camera-quality-settings.js";
 import { probeCameraCapabilities, selectCameraMode, type CameraMode } from "./camera-capabilities.js";
 import { getSession } from "./tournament-session.js";
@@ -111,7 +112,9 @@ async start(
         cameraName,
         cameraDeviceId,
         microphoneName,
-        outputDirectory
+        outputDirectory,
+        audioSyncOffsetMs: getSession()?.assignments.find(a => a.cameraId === cameraId)?.audioSyncOffsetMs ?? -300,
+        overlay: (() => { const overlay = getSession()?.assignments.find(a => a.cameraId === cameraId)?.overlay; return overlay ? { ...overlay, imagePath: resolveOverlayImage(overlay.imageId) } : undefined; })()
       });
 
       await capture.waitUntilReady();
