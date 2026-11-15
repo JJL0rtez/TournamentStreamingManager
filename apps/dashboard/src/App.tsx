@@ -178,6 +178,7 @@ interface SessionAssignment {
   microphoneName: string;
   ring: string;
   audioSyncOffsetMs?: number;
+  overlays?: Array<{ imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number }>;
   overlay?: { imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number };
 }
 interface TournamentSession {
@@ -3384,8 +3385,20 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [frameTick, setFrameTick] = useState(0);
   const [session, setSession] = useState<TournamentSession>({ eventName: "", assignments: [] });
   const [sessionBusy, setSessionBusy] = useState(false);
-  async function uploadOverlay(cameraId: string, file: File) {
-    if (!/image\/(png|jpeg)/.test(file.type) || file.size > 5 * 1024 * 1024) { setError("Overlay must be PNG or JPEG, up to 5 MB."); return; }
+  const [overlayLibrary, setOverlayLibrary] = useState<Array<{ imageId: string; name: string }>>([]);
+  async function refreshOverlayLibrary() {
+    const result = await requestNode("/api/overlays/images");
+    setOverlayLibrary(result.images ?? []);
+  }
+  function updateOverlays(cameraId: string, updater: (items: NonNullable<SessionAssignment["overlays"]>) => NonNullable<SessionAssignment["overlays"]>) {
+    setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === cameraId
+      ? { ...a, overlays: updater(a.overlays ?? (a.overlay ? [a.overlay] : [])), overlay: undefined } : a) }));
+    setPreflight(null);
+  }
+  async function uploadOverlay(cameraId: string, slot: number, file: File) {
+    if (!(["image/png", "image/jpeg", "image/gif"].includes(file.type)) || file.size > 5 * 1024 * 1024) {
+      setError("Overlay must be PNG, JPEG or GIF, up to 5 MB."); return;
+    }
     setError(null);
     try {
       const base64 = await new Promise<string>((resolve, reject) => {
@@ -3397,15 +3410,16 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       const result: { imageId: string } = await requestNode("/api/overlays/images", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base64 })
       });
-      setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === cameraId
-        ? { ...a, overlay: { imageId: result.imageId, position: a.overlay?.position ?? "top-right", offsetX: a.overlay?.offsetX ?? 20, offsetY: a.overlay?.offsetY ?? 20 } } : a) }));
-      setPreflight(null);
+      updateOverlays(cameraId, items => {
+        const next = [...items];
+        next[slot] = { imageId: result.imageId, position: next[slot]?.position ?? "top-right", offsetX: next[slot]?.offsetX ?? 20, offsetY: next[slot]?.offsetY ?? 20 };
+        return next;
+      });
+      await refreshOverlayLibrary();
     } catch (error) { setError(String(error)); }
   }
-  function changeOverlay(cameraId: string, changes: Partial<NonNullable<SessionAssignment["overlay"]>>) {
-    setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === cameraId && a.overlay
-      ? { ...a, overlay: { ...a.overlay, ...changes } } : a) }));
-    setPreflight(null);
+  function changeOverlay(cameraId: string, slot: number, changes: Partial<NonNullable<SessionAssignment["overlays"]>[number]>) {
+    updateOverlays(cameraId, items => items.map((item, i) => i === slot ? { ...item, ...changes } : item));
   }
 
   const [availableEvents, setAvailableEvents] = useState<Array<{ eventId: string; eventName: string; assignmentCount: number }>>([]);
@@ -4437,7 +4451,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                     cameraId: camera.id, cameraName: camera.name,
                     microphoneName: assignedMic, ring,
                     audioSyncOffsetMs: old.assignments.find(item => item.cameraId === camera.id)?.audioSyncOffsetMs ?? -300,
-                    overlay: old.assignments.find(item => item.cameraId === camera.id)?.overlay
+                    overlays: old.assignments.find(item => item.cameraId === camera.id)?.overlays ?? (old.assignments.find(item => item.cameraId === camera.id)?.overlay ? [old.assignments.find(item => item.cameraId === camera.id)!.overlay!] : [])
                   }] : rest };
                 })} />
               {assignment && <span className="field">
@@ -4456,28 +4470,46 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                 <small>Negative values advance audio; positive values delay it. Save Session to apply on the next recording.</small>
               </span>}
               {assignment && <div className="field" style={{ display: "grid", gap: 8 }}>
-                <strong>Image overlay</strong>
-                <input type="file" accept="image/png,image/jpeg" aria-label={`Overlay image for ${assignment.ring}`}
-                  disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                  onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, file); e.target.value = ""; }} />
-                {assignment.overlay && <>
-                  <img src={`/api/overlays/images/${encodeURIComponent(assignment.overlay.imageId)}`} alt="Overlay preview" style={{ maxWidth: 200, maxHeight: 100, objectFit: "contain" }} />
-                  <label>Position <select value={assignment.overlay.position} disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => changeOverlay(camera.id, { position: e.target.value as NonNullable<SessionAssignment["overlay"]>["position"] })}>
+                <strong>Image overlays (up to 4)</strong>
+                <button type="button" onClick={() => void refreshOverlayLibrary().catch(error => setError(String(error)))}>Refresh saved image library</button>
+                <small>Choose an image already stored in config/overlays, or upload a new PNG, JPEG or animated GIF. Browsers control the upload file picker's initial folder, so selecting from the saved library is the default.</small>
+                {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).map((overlay, slot) => <div key={`${camera.id}-overlay-${slot}`} className="bulk-results" style={{ display: "grid", gap: 6 }}>
+                  <strong>Overlay {slot + 1}</strong>
+                  <img src={`/api/overlays/images/${encodeURIComponent(overlay.imageId)}`} alt={`Overlay ${slot + 1} preview`} style={{ maxWidth: 200, maxHeight: 100, objectFit: "contain" }} />
+                  <label>Saved image <select value={overlay.imageId} disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onFocus={() => { if (!overlayLibrary.length) void refreshOverlayLibrary().catch(error => setError(String(error))); }}
+                    onChange={e => changeOverlay(camera.id, slot, { imageId: e.target.value })}>
+                    {!overlayLibrary.some(img => img.imageId === overlay.imageId) && <option value={overlay.imageId}>{overlay.imageId}</option>}
+                    {overlayLibrary.map(img => <option key={img.imageId} value={img.imageId}>{img.name}</option>)}
+                  </select></label>
+                  <label>Replace with uploaded image <input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
+                    disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, slot, file); e.target.value = ""; }} /></label>
+                  <label>Position <select value={overlay.position} disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onChange={e => changeOverlay(camera.id, slot, { position: e.target.value as typeof overlay.position })}>
                     <option value="top-left">Top left</option><option value="top-right">Top right</option>
                     <option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option>
                   </select></label>
-                  <label>Horizontal offset (px) <input type="number" min={-4096} max={4096} step={1} value={assignment.overlay.offsetX}
+                  <label>Horizontal offset (px) <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetX}
                     disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, { offsetX: e.target.valueAsNumber }); }} /></label>
-                  <label>Vertical offset (px) <input type="number" min={-4096} max={4096} step={1} value={assignment.overlay.offsetY}
+                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetX: e.target.valueAsNumber }); }} /></label>
+                  <label>Vertical offset (px) <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetY}
                     disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, { offsetY: e.target.valueAsNumber }); }} /></label>
+                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetY: e.target.valueAsNumber }); }} /></label>
                   <button type="button" disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onClick={() => { setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === camera.id ? { ...a, overlay: undefined } : a) })); setPreflight(null); }}>Remove overlay</button>
-                </>}
-                <small>Positive offsets move inward from the selected corner. Save Session, then restart recording to apply. Image files live in config/overlays on this node.</small>
+                    onClick={() => updateOverlays(camera.id, items => items.filter((_, i) => i !== slot))}>Remove overlay {slot + 1}</button>
+                </div>)}
+                {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length < 4 && <div>
+                  <button type="button" disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onClick={() => { const first = overlayLibrary[0]?.imageId; if (!first) { void refreshOverlayLibrary().catch(error => setError(String(error))); setError("Upload an image or refresh the saved library first."); return; }
+                      updateOverlays(camera.id, items => [...items, { imageId: first, position: "top-right", offsetX: 20, offsetY: 20 }]); }}>Add overlay from library</button>
+                  <label>Or add new image <input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
+                    disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                    onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, (assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length, file); e.target.value = ""; }} /></label>
+                </div>}
+                <small>Save Session and restart capture to apply. Animated GIFs loop continuously. Four animated overlays per camera may increase CPU/GPU load.</small>
               </div>}
+
             </label>;
           })}
         </div>
@@ -4517,11 +4549,6 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       </section>
 
       {node.local && <SystemResourceMonitor requestNode={requestNode} />}
-      {node.local && <>
-        <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
-        <CameraAssetInventory nodeId={node.id} />
-        <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />
-      </>}
       <CaptureQualityPanel />
       <section aria-label="Tournament readiness" className="overview">
         <h2>Tournament Readiness</h2>
@@ -4556,6 +4583,15 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         )}
       </section>
 
+      <section className="overview" aria-label="Testing and diagnostics"><h2>Testing and diagnostics</h2><p>Expand only the tool you need.</p>
+      <details><summary>USB topology, inventory and bandwidth tests</summary>
+      {node.local && <>
+        <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
+        <CameraAssetInventory nodeId={node.id} />
+        <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />
+      </>}
+      </details>
+      <details><summary>Pre-tournament sign-off and hardware report</summary>
       <RingPreTournamentSignoff nodeId={node.id} eventId={session.eventId || null}
         eventName={session.eventName} assignments={session.assignments} />
       <TournamentHardwareReport requestNode={requestNode} nodeId={node.id}
@@ -4565,6 +4601,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         latestStress={savedStressReports.length ? savedStressReports[savedStressReports.length - 1] : null}
         equipmentTests={equipmentTests} />
 
+      </details>
+      <details><summary>FFmpeg encoder diagnostics</summary>
       <section aria-label="FFmpeg encoder diagnostics" className="overview">
         <h2>FFmpeg Encoder Diagnostics</h2>
         <p>FFmpeg's reported encoding FPS, processing speed, dropped-frame count and bitrate for each running capture process.
@@ -4589,6 +4627,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         </div>}
       </section>
 
+      </details>
+      <details><summary>Multi-camera recording stress test</summary>
       <section aria-label="Multi-camera recording stress test" className="overview">
         <h2>Multi-Camera Recording Stress Test</h2>
         <p>Start local recordings on at least two cameras, then monitor all active recordings together for 30 seconds.
@@ -4680,6 +4720,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         </div>
       </section>
 
+      </details>
+      <details><summary>Camera and microphone test mode</summary>
       <section aria-label="Camera and microphone test mode" className="overview">
         <h2>Camera and Microphone Test Mode</h2>
         <p>Start a camera preview to verify live video. Speak into the microphone during the three-second audio test.
@@ -4705,6 +4747,22 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         })}
       </section>
 
+      </details>
+      <details><summary>Advanced testing and troubleshooting</summary>
+      <RecordingConfigurationReliabilityPanel requestNode={requestNode} />
+      <CameraConfigurationReliabilityPanel requestNode={requestNode} />
+      <ReliabilityWarningsPanel requestNode={requestNode} />
+      <CameraHealthPanel requestNode={requestNode} />
+      <CameraHealthHistoryPanel requestNode={requestNode} />
+      <CameraDisconnectionAnalysis requestNode={requestNode} />
+      <UsbReliabilityWarningsPanel requestNode={requestNode} />
+      <UsbRecordingCorrelationPanel requestNode={requestNode} />
+      <CameraTroubleshootingPanel requestNode={requestNode} />
+      <GuidedTroubleshootingTests />
+      <FailureInvestigationPanel requestNode={requestNode} />
+      <CameraReliabilityDashboard requestNode={requestNode} />
+      </details>
+      </section>
       <section aria-label="Tournament recording summary" className="overview">
         <div>
           <strong>Tournament recording summary</strong>{" "}
@@ -4867,18 +4925,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         nodeId={node.id} eventId={session.eventId || ""} eventName={session.eventName || ""}
         requestNode={requestNode} />
       <TournamentReportArchive />
-      <RecordingConfigurationReliabilityPanel requestNode={requestNode} />
-      <CameraConfigurationReliabilityPanel requestNode={requestNode} />
-      <ReliabilityWarningsPanel requestNode={requestNode} />
-      <CameraHealthPanel requestNode={requestNode} />
-      <CameraHealthHistoryPanel requestNode={requestNode} />
-      <CameraDisconnectionAnalysis requestNode={requestNode} />
-      <UsbReliabilityWarningsPanel requestNode={requestNode} />
-      <UsbRecordingCorrelationPanel requestNode={requestNode} />
-      <CameraTroubleshootingPanel requestNode={requestNode} />
-      <GuidedTroubleshootingTests />
-      <FailureInvestigationPanel requestNode={requestNode} />
-      <CameraReliabilityDashboard requestNode={requestNode} />
+
       <TournamentReadinessOverview requestNode={requestNode} readiness={readiness}
         readinessCurrent={readinessDraft === JSON.stringify(session)} captures={captures}
         streamCount={youtubeStreams.length} nodeId={node.id} eventId={session.eventId || "unsaved"}

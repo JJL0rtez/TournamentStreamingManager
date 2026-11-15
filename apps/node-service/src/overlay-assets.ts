@@ -1,10 +1,15 @@
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+export type OverlayImage = { imageId: string; name: string };
+export function listOverlayImages(): OverlayImage[] {
+  fs.mkdirSync(folder, { recursive: true });
+  return fs.readdirSync(folder).filter(n => /^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg|gif)$/i.test(n)).map(n => ({ imageId: n, name: n }));
+}
 
 const folder = path.resolve(process.env.TOURNAMENT_CONFIG_DIR || path.join(process.cwd(), "config"), "overlays");
 export function overlayFile(imageId: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg)$/i.test(imageId)) throw new Error("Invalid overlay image ID");
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg|gif)$/i.test(imageId)) throw new Error("Invalid overlay image ID");
   return path.join(folder, imageId);
 }
 export function saveOverlayImage(base64: unknown): string {
@@ -13,8 +18,9 @@ export function saveOverlayImage(base64: unknown): string {
   if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error("Overlay image must be 5 MB or smaller");
   const png = bytes.length > 8 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   const jpg = bytes.length > 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
-  if (!png && !jpg) throw new Error("Only PNG and JPEG images are supported");
-  const imageId = `${randomUUID()}.${png ? "png" : "jpg"}`;
+  const gif = bytes.length > 6 && (bytes.subarray(0,6).toString("ascii") === "GIF89a" || bytes.subarray(0,6).toString("ascii") === "GIF87a");
+  if (!png && !jpg && !gif) throw new Error("Only PNG, JPEG and GIF images are supported");
+  const imageId = `${randomUUID()}.${png ? "png" : gif ? "gif" : "jpg"}`;
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(overlayFile(imageId), bytes, { flag: "wx" });
   return imageId;

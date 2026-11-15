@@ -1,4 +1,4 @@
-import { saveOverlayImage, getOverlayImage } from "./overlay-assets.js";
+import { saveOverlayImage, getOverlayImage, listOverlayImages } from "./overlay-assets.js";
 import { summarizeCameraReliability } from "./camera-reliability-summary.js";
 import { readDiagnosticThresholds, saveDiagnosticThresholds } from "./diagnostic-thresholds.js";
 import { investigateRecordingFailures } from "./failure-investigation.js";
@@ -68,6 +68,7 @@ installOperatorAuth(app);
 app.use("/api", requireOperator);
 installRemoteNodeRoutes(app);
 // Overlay images are stored locally per node. Copy/import the image to each node that needs it.
+app.get("/api/overlays/images", (_req, res) => { res.json({ images: listOverlayImages() }); });
 app.post("/api/overlays/images", (req, res) => {
   try { res.json({ imageId: saveOverlayImage(req.body?.base64) }); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
@@ -76,7 +77,7 @@ app.get("/api/overlays/images/:imageId", (req, res) => {
   try {
     const imageId = String(req.params.imageId);
     res.setHeader("Cache-Control", "private, max-age=3600");
-    res.type(imageId.endsWith(".png") ? "png" : "jpeg").send(getOverlayImage(imageId));
+    res.type(imageId.endsWith(".png") ? "png" : imageId.endsWith(".gif") ? "gif" : "jpeg").send(getOverlayImage(imageId));
   } catch { res.status(404).json({ error: "Overlay image not found on this node" }); }
 });
 

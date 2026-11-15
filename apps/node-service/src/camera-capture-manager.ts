@@ -114,7 +114,7 @@ async start(
         microphoneName,
         outputDirectory,
         audioSyncOffsetMs: getSession()?.assignments.find(a => a.cameraId === cameraId)?.audioSyncOffsetMs ?? -300,
-        overlay: (() => { const overlay = getSession()?.assignments.find(a => a.cameraId === cameraId)?.overlay; return overlay ? { ...overlay, imagePath: resolveOverlayImage(overlay.imageId) } : undefined; })()
+        overlays: (() => { const assignment = getSession()?.assignments.find(a => a.cameraId === cameraId); return (assignment?.overlays ?? (assignment?.overlay ? [assignment.overlay] : [])).map(overlay => ({ ...overlay, imagePath: resolveOverlayImage(overlay.imageId) })); })()
       });
 
       await capture.waitUntilReady();
