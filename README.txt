@@ -76,3 +76,84 @@ Milestone 86: Post-tournament technical report
 - Existing endpoints are reused. No recording settings are modified.
 - This archive remains a cumulative source subset, not a complete verified standalone project.
 - Full compilation and Windows hardware tests have not been run.
+
+Milestone 87: Tournament-to-tournament reliability comparisons
+- Save a snapshot of the existing post-tournament technical report for each event.
+- Compare two browser-local snapshots: incident counts, interruptions, unresolved cases, recording
+  sessions and failures, failure percentages, and operator-reported average closure duration.
+- Show node-wide USB observations separately with explicit non-event-specific caveat.
+- Export comparisons as JSON; retain up to 30 snapshots, one per node/event.
+- Snapshot saving is manual, browser-local, and does not sync between operator devices.
+- The existing recording journal is capped at 200 sessions, so historical comparisons may be incomplete.
+- Source subset only; full-project compilation and Windows camera tests remain pending.
+
+Milestone 88: Multi-tournament reliability trends
+- Added browser-side multi-event trends panel using saved post-tournament comparison snapshots.
+- Filter by capture node and chart recording failure rate, reported interruptions, incident count, or operator closure time.
+- Exact values table and JSON export; missing denominators/closure values show N/A.
+- Uses existing 30-snapshot browser-local retention. No new server endpoint.
+- Snapshots are sorted by report generation timestamp, which may differ from event date.
+- Event duration, camera count, and journal retention limit comparisons; USB history is excluded from trends.
+- Full-project compilation and hardware testing remain pending.
+
+Milestone 89: Individual camera reliability trends
+- Tournament report archive now offers node-scoped camera selection and an SVG failure-rate chart.
+- Per-event table includes sessions, failures, warnings, and ring label.
+- Exports selected camera's event series as CSV or JSON.
+- Missing camera entries and zero-session events remain unavailable, not zero failures.
+- Browser-local reports remain capped at 15. No backend changes.
+- Full project build and Windows camera testing not yet performed.
+
+Milestone 90: Operator-confirmed physical camera identity associations
+- In the tournament report archive, assign a stable physical label to each historical
+  node-scoped camera device ID. Reuse the exact same label for confirmed re-enumerations.
+- Individual camera reliability trends group device IDs sharing the same confirmed label
+  on the same capture node; without a label they remain separate.
+- Export associations as JSON. Labels persist in browser localStorage, not on the node.
+- Does not infer USB serial numbers or automatically prove hardware identity.
+- Archives with multiple IDs for the same camera in one event use the first matching row;
+  investigate those reports separately. Avoid using ring names as hardware labels.
+- This archive is a cumulative source subset, not a verified standalone build.
+- Full compilation and Windows hardware testing remain pending.
+
+Milestone 91: Windows USB hardware fingerprint candidates
+- Read-only USB PnP diagnostics now report vendor/product IDs, Windows container IDs, and
+  conservative serial-like instance suffix candidates when available.
+- Dashboard displays identity evidence and possible previous matches after a second inventory.
+- Export hardware inventory as JSON for manual camera identity verification.
+- No automatic linking: many identical webcams have no unique serial, composite interfaces
+  and port-generated instance IDs can mislead, and Windows container IDs may change.
+- Windows PowerShell/USB hardware validation and full-project compilation remain pending.
+
+Milestone 92: Persistent USB hardware fingerprint history and confirmed matching
+- USB topology inventory saves up to 25 successful Windows snapshots per capture node in browser local storage.
+- Compares fresh PnP identifiers against saved snapshots for possible serial-candidate or container-ID matches.
+- Operator must enter an exact recording-report camera ID and unique physical label to confirm a link.
+- Confirmed associations use the existing browser-local physical camera identity mapping. Refresh report archive to see changes.
+- Exports saved fingerprint history and supports explicit history clearing. No automatic identity merges.
+- USB PnP instance IDs, container IDs and serial-like suffixes are not authenticated permanent serial numbers.
+
+Milestone 93: Physical camera equipment inventory and maintenance history
+- Browser-local equipment records per capture node with unique physical camera labels.
+- Model, manually verified serial, purchase date, warranty end date, and notes.
+- Timestamped maintenance actions with operator notes, removal, and capped history.
+- JSON export for backups; inventory is not synchronized with other browsers or hardware.
+- Previous milestone files included as a cumulative available source subset, not a standalone build.
+- Full-project compilation and Windows hardware testing remain pending.
+
+Milestone 94: Recurring equipment maintenance scheduling
+- Add per-camera recurring maintenance tasks with configurable intervals (1-3650 days) and first due dates.
+- Dashboard lists all scheduled tasks, overdue and due-today counts, and upcoming checks.
+- Completing a task writes a timestamped maintenance log entry and schedules its next occurrence.
+- Operators can remove schedules without deleting maintenance history.
+- Browser-local data only; reminders appear when dashboard is open, not as background notifications.
+- Source subset only. Full compilation and hardware validation remain pending.
+
+Milestone 95: Equipment maintenance in consolidated readiness
+- Refresh consolidated readiness now reads the current node's browser-local equipment inventory and scheduled inspections.
+- Overdue or due-today tasks generate a warning, with affected equipment and task details.
+- No registered assets, no schedules, malformed dates, or inaccessible storage yield UNKNOWN, never PASS.
+- A PASS means only that recorded maintenance schedules have no due or overdue tasks; it does not certify unregistered cameras or hardware health.
+- Completing scheduled maintenance in Camera equipment inventory is reflected on the next readiness refresh.
+- Report JSON export includes the maintenance check. Browser-local records do not synchronize between operators or PCs.
+- Full-project compilation and Windows hardware testing remain pending. This is a cumulative available source subset, not a verified standalone application.

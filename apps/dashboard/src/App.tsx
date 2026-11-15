@@ -364,6 +364,172 @@ type PostTournamentReport = {
   troubleshooting: { worksheets: number; withRecordedChanges: number; byCategory: Array<{ category: string; count: number }> };
   limitations: string[];
 };
+const POST_TOURNAMENT_COMPARISON_KEY = "tournament-post-technical-snapshots-v1";
+function readPostTournamentSnapshots(): PostTournamentReport[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(POST_TOURNAMENT_COMPARISON_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((value): value is PostTournamentReport => {
+      if (!value || typeof value !== "object") return false;
+      const r = value as Partial<PostTournamentReport>;
+      return typeof r.nodeId === "string" && typeof r.eventId === "string" &&
+        typeof r.generatedAt === "string" && Number.isFinite(Date.parse(r.generatedAt)) &&
+        !!r.incidents && typeof r.incidents.interrupted === "number" &&
+        !!r.recordings && typeof r.recordings.failed === "number" &&
+        typeof r.recordings.total === "number" && !!r.usb &&
+        typeof r.usb.observedDisconnects === "number";
+    }).slice(0, 30);
+  } catch { return []; }
+}
+function TournamentToTournamentComparison() {
+  const [snapshots, setSnapshots] = useState<PostTournamentReport[]>(readPostTournamentSnapshots);
+  const [first, setFirst] = useState("");
+  const [second, setSecond] = useState("");
+  const [message, setMessage] = useState("");
+  const keyFor = (r: PostTournamentReport) => `${r.nodeId}|${r.eventId}|${r.generatedAt}`;
+  const a = snapshots.find(r => keyFor(r) === first);
+  const b = snapshots.find(r => keyFor(r) === second);
+  const metrics = a && b ? [
+    { label: "Reported incidents", before: a.incidents.total, after: b.incidents.total },
+    { label: "Reported interruptions", before: a.incidents.interrupted, after: b.incidents.interrupted },
+    { label: "Unresolved incidents", before: a.incidents.unresolved, after: b.incidents.unresolved },
+    { label: "Failed recordings", before: a.recordings.failed, after: b.recordings.failed },
+    { label: "Recording sessions", before: a.recordings.total, after: b.recordings.total },
+    { label: "Recording failure rate (%)", before: a.recordings.total ? a.recordings.failed / a.recordings.total * 100 : null,
+      after: b.recordings.total ? b.recordings.failed / b.recordings.total * 100 : null },
+    { label: "Average operator closure (min)", before: a.incidents.averageResolutionMinutes,
+      after: b.incidents.averageResolutionMinutes },
+    { label: "Node-wide USB disconnects (not event-specific)", before: a.usb.observedDisconnects,
+      after: b.usb.observedDisconnects }
+  ] : [];
+  const format = (n: number | null) => n === null ? "N/A" : Number(n.toFixed(2)).toString();
+  const refresh = () => { setSnapshots(readPostTournamentSnapshots()); setMessage(""); };
+  const exportComparison = () => {
+    if (!a || !b || first === second) return;
+    const payload = { exportedAt: new Date().toISOString(), baseline: a, comparison: b, metrics,
+      limitations: ["Snapshots are saved in this browser only and limited to 30.",
+        "Recording counts use a bounded journal, so events with more than 200 sessions can be undercounted.",
+        "USB history is node-wide, not event-specific; its counts must not be used as event reliability scores.",
+        "Troubleshooting worksheets are not event-scoped; incident resolution times are operator-reported.",
+        "Different event durations and recording volumes make raw incident counts non-comparable."] };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = "tournament-reliability-comparison.json";
+    document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  return <section className="session-panel" aria-label="Tournament-to-tournament reliability comparison">
+    <h3>Tournament-to-tournament reliability comparison</h3>
+    <p className="muted">Compare saved post-tournament technical report snapshots. Save a report after each event;
+      comparisons remain in this browser and are not shared with other dashboards.</p>
+    <button type="button" onClick={refresh}>Refresh saved reports</button>
+    {snapshots.length === 0 && <p>No saved reports yet. Generate a post-tournament technical report and click Save comparison snapshot.</p>}
+    {snapshots.length > 0 && <>
+      <label>Baseline event <select value={first} onChange={e => setFirst(e.target.value)}>
+        <option value="">Choose baseline</option>
+        {snapshots.map(r => <option key={keyFor(r)} value={keyFor(r)}>{r.eventName || r.eventId} ({r.nodeId}, {new Date(r.generatedAt).toLocaleString()})</option>)}
+      </select></label>{" "}
+      <label>Comparison event <select value={second} onChange={e => setSecond(e.target.value)}>
+        <option value="">Choose comparison</option>
+        {snapshots.map(r => <option key={keyFor(r)} value={keyFor(r)}>{r.eventName || r.eventId} ({r.nodeId}, {new Date(r.generatedAt).toLocaleString()})</option>)}
+      </select></label>
+      <button type="button" disabled={!a || !b || first === second} onClick={exportComparison}>Export comparison JSON</button>
+      <button type="button" disabled={!first && !second} onClick={() => {
+        const remove = first || second;
+        const next = snapshots.filter(r => keyFor(r) !== remove);
+        try { localStorage.setItem(POST_TOURNAMENT_COMPARISON_KEY, JSON.stringify(next)); setSnapshots(next);
+          if (first === remove) setFirst(""); if (second === remove) setSecond(""); setMessage("Snapshot deleted."); }
+        catch { setMessage("Unable to update browser storage."); }
+      }}>Delete selected baseline (or comparison)</button>
+    </>}
+    {message && <p role="status">{message}</p>}
+    {a && b && first !== second && <>
+      <h4>{a.eventName || a.eventId} versus {b.eventName || b.eventId}</h4>
+      <div style={{ overflowX: "auto" }}><table><thead><tr><th>Metric</th><th>Baseline</th><th>Comparison</th><th>Difference</th></tr></thead><tbody>
+        {metrics.map(m => <tr key={m.label}><td>{m.label}</td><td>{format(m.before)}</td>
+          <td>{format(m.after)}</td><td>{m.before === null || m.after === null ? "N/A" : format(m.after - m.before)}</td></tr>)}
+      </tbody></table></div>
+      <p className="muted">A lower count does not establish improved reliability. Event lengths and recording volumes may differ;
+        USB counts cover retained node-wide observations, not the selected event. Historical data may be truncated.</p>
+    </>}
+  </section>;
+}
+
+function TournamentReliabilityTrends() {
+  const [snapshots, setSnapshots] = useState<PostTournamentReport[]>(readPostTournamentSnapshots);
+  const [nodeFilter, setNodeFilter] = useState("all");
+  const [metric, setMetric] = useState<"failureRate" | "interruptions" | "incidents" | "recovery">("failureRate");
+  const nodes = [...new Set(snapshots.map(s => s.nodeId))].sort();
+  const visible = snapshots.filter(s => nodeFilter === "all" || s.nodeId === nodeFilter)
+    .slice().sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
+  const values = visible.map(s => {
+    if (metric === "failureRate") return s.recordings.total > 0 ? s.recordings.failed / s.recordings.total * 100 : null;
+    if (metric === "interruptions") return s.incidents.interrupted;
+    if (metric === "incidents") return s.incidents.total;
+    return s.incidents.averageResolutionMinutes;
+  });
+  const available = values.filter((n): n is number => n !== null && Number.isFinite(n));
+  const max = Math.max(1, ...available);
+  const metricLabel = { failureRate: "Recording failure rate (%)", interruptions: "Reported interruptions",
+    incidents: "Reported incidents", recovery: "Average operator closure (minutes)" }[metric];
+  const exportTrends = () => {
+    const payload = { exportedAt: new Date().toISOString(), metric, metricLabel, nodeFilter,
+      events: visible.map((s, i) => ({ nodeId: s.nodeId, eventId: s.eventId, eventName: s.eventName,
+        generatedAt: s.generatedAt, value: values[i], recordingSessions: s.recordings.total,
+        failedRecordings: s.recordings.failed, reportedIncidents: s.incidents.total,
+        interruptions: s.incidents.interrupted, averageClosureMinutes: s.incidents.averageResolutionMinutes })),
+      limitations: ["Browser-local snapshots, maximum 30 across nodes.",
+        "Recording journal retains at most 200 sessions; failure rates may be incomplete.",
+        "Incident counts are operator-reported, not normalized by tournament duration.",
+        "Resolution times reflect operator closure, not measured stream downtime.",
+        "Snapshots are ordered by report generation time, not necessarily event date.",
+        "Node comparisons may reflect different hardware and workloads."] };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a"); link.href = url; link.download = "tournament-reliability-trends.json";
+    document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  return <section className="session-panel" aria-label="Tournament reliability trends">
+    <h3>Multi-tournament reliability trends</h3>
+    <p className="muted">Visualize saved post-tournament snapshots in report-generation order. Refresh after saving a new snapshot.
+      Each event contributes one saved snapshot per node.</p>
+    <button type="button" onClick={() => setSnapshots(readPostTournamentSnapshots())}>Refresh trends</button>{" "}
+    <label>Capture node <select value={nodeFilter} onChange={e => setNodeFilter(e.target.value)}>
+      <option value="all">All nodes</option>{nodes.map(n => <option key={n} value={n}>{n}</option>)}
+    </select></label>{" "}
+    <label>Metric <select value={metric} onChange={e => setMetric(e.target.value as typeof metric)}>
+      <option value="failureRate">Recording failure rate (%)</option>
+      <option value="interruptions">Reported interruptions</option>
+      <option value="incidents">Reported incidents</option>
+      <option value="recovery">Average operator closure (minutes)</option>
+    </select></label>{" "}
+    <button type="button" disabled={!visible.length} onClick={exportTrends}>Export trends JSON</button>
+    {visible.length === 0 ? <p>No saved snapshots for this node. Generate and save post-tournament reports first.</p> : <>
+      <p><strong>{metricLabel}</strong> across {visible.length} saved tournament{visible.length === 1 ? "" : "s"}</p>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: "0.5rem", minHeight: 165,
+        overflowX: "auto", padding: "0.75rem 0", borderBottom: "1px solid #888" }} role="img"
+        aria-label={`${metricLabel} by saved tournament, with exact values in the table below`}>
+        {visible.map((s, i) => <div key={`${s.nodeId}:${s.eventId}:${s.generatedAt}`}
+          title={`${s.eventName || s.eventId}: ${values[i] === null ? "N/A" : values[i]?.toFixed(2)}`}
+          style={{ minWidth: 72, maxWidth: 120, flex: "1 0 72px", display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "flex-end", height: 150 }}>
+          <small>{values[i] === null ? "N/A" : values[i]?.toFixed(1)}</small>
+          <div style={{ background: "#4b86b4", width: "65%", minHeight: values[i] === null ? 0 : 2,
+            height: values[i] === null ? 0 : `${Math.max(2, values[i]! / max * 112)}px` }} />
+          <small style={{ textAlign: "center", overflowWrap: "anywhere" }}>{s.eventName || s.eventId}</small>
+        </div>)}
+      </div>
+      <div style={{ overflowX: "auto" }}><table><thead><tr><th>Report date</th><th>Node</th><th>Event</th>
+        <th>{metricLabel}</th><th>Recording sessions</th></tr></thead><tbody>
+        {visible.map((s, i) => <tr key={`${s.nodeId}:${s.eventId}:${s.generatedAt}`}>
+          <td>{new Date(s.generatedAt).toLocaleString()}</td><td>{s.nodeId}</td><td>{s.eventName || s.eventId}</td>
+          <td>{values[i] === null ? "N/A" : values[i]?.toFixed(2)}</td><td>{s.recordings.total}</td>
+        </tr>)}
+      </tbody></table></div>
+    </>}
+    <p className="muted">Trends are descriptive, not proof of improved reliability. Events may have different durations,
+      camera counts and workloads. Recording history is bounded; browser-local incident logs and snapshots may be incomplete.
+      USB observations are intentionally excluded because they are node-wide rather than event-specific.</p>
+  </section>;
+}
+
 function PostTournamentTechnicalReport({ nodeId, eventId, eventName, requestNode }: {
   nodeId: string; eventId: string; eventName: string;
   requestNode: (url: string, options?: RequestInit) => Promise<any>;
@@ -371,6 +537,16 @@ function PostTournamentTechnicalReport({ nodeId, eventId, eventName, requestNode
   const [report, setReport] = useState<PostTournamentReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [savedMessage, setSavedMessage] = useState("");
+  function saveSnapshot() {
+    if (!report) return;
+    try {
+      const existing = readPostTournamentSnapshots();
+      const next = [report, ...existing.filter(r => !(r.nodeId === report.nodeId && r.eventId === report.eventId))].slice(0, 30);
+      localStorage.setItem(POST_TOURNAMENT_COMPARISON_KEY, JSON.stringify(next));
+      setSavedMessage("Saved this event snapshot for tournament comparisons.");
+    } catch { setSavedMessage("Unable to save snapshot. Export the JSON instead."); }
+  }
   async function generate() {
     if (!eventId || busy) return;
     setBusy(true); setError(""); setReport(null);
@@ -456,7 +632,9 @@ function PostTournamentTechnicalReport({ nodeId, eventId, eventName, requestNode
     <p className="muted">Combine this event's browser incident log and recording journal with node-wide USB observations and browser troubleshooting history. Generate after the event for the most complete retained snapshot.</p>
     {!eventId && <p className="muted">Save or select a tournament event to generate its report.</p>}
     <button type="button" disabled={!eventId || busy} onClick={() => void generate()}>{busy ? "Generating…" : "Generate technical report"}</button>{" "}
-    {report && <button type="button" onClick={download}>Export report JSON</button>}
+    {report && <><button type="button" onClick={download}>Export report JSON</button>{" "}
+      <button type="button" onClick={saveSnapshot}>Save comparison snapshot</button></>}
+    {savedMessage && <p role="status">{savedMessage}</p>}
     {error && <p role="alert" className="camera-warning">Report generation failed: {error}</p>}
     {report && <>
       <p><strong>{report.eventName || report.eventId}</strong> · Generated {new Date(report.generatedAt).toLocaleString()}</p>
@@ -1611,10 +1789,10 @@ type CameraReliabilitySummary = {
   limitations: string[];
 };
 type ReadinessCheck = { name: string; state: "pass" | "warning" | "blocker" | "unknown"; detail: string };
-function TournamentReadinessOverview({ requestNode, readiness, readinessCurrent, captures, streamCount }: {
+function TournamentReadinessOverview({ requestNode, readiness, readinessCurrent, captures, streamCount, nodeId }: {
   requestNode: (url: string, options?: RequestInit) => Promise<any>;
   readiness: TournamentReadiness | null; readinessCurrent: boolean;
-  captures: Capture[]; streamCount: number;
+  captures: Capture[]; streamCount: number; nodeId: string;
 }) {
   const [snapshot, setSnapshot] = useState<{ checkedAt: string; checks: ReadinessCheck[]; limitations: string[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1637,6 +1815,31 @@ function TournamentReadinessOverview({ requestNode, readiness, readinessCurrent,
     if (reliability.status === "fulfilled") add("Camera and USB history", reliability.value.totals.failedRecordings || reliability.value.totals.usbDisconnects ? "warning" : reliability.value.totals.recordings ? "pass" : "unknown",
       `${reliability.value.totals.failedRecordings} failed recording(s), ${reliability.value.totals.usbDisconnects} observed USB disconnect(s) in retained history.`);
     else add("Camera and USB history", "unknown", "Reliability history unavailable: " + String(reliability.reason));
+    // Browser-local equipment schedules are operator records, not live device checks.
+    // Read at refresh time so completed inspections are reflected without reloading.
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(`tournament-camera-assets-v1:${nodeId}`) || "[]");
+      if (!Array.isArray(raw) || !raw.every(a => a && typeof a.label === "string" && Array.isArray(a.maintenance))) {
+        add("Camera maintenance", "unknown", "Equipment inventory data is invalid; inspect or restore the inventory.");
+      } else {
+        const assets = raw as CameraAssetRecord[];
+        const today = new Date().toISOString().slice(0, 10);
+        const schedules = assets.flatMap(a => (Array.isArray(a.schedules) ? a.schedules : []).map(task => ({ camera: a.label, task })));
+        const valid = schedules.filter(({ task }) => typeof task.nextDue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.nextDue));
+        const overdue = valid.filter(({ task }) => task.nextDue < today);
+        const due = valid.filter(({ task }) => task.nextDue === today);
+        if (!assets.length || !schedules.length || valid.length !== schedules.length) {
+          add("Camera maintenance", "unknown", `${assets.length} registered camera(s), ${valid.length} valid scheduled inspection(s). ${!assets.length ? "Register equipment and maintenance schedules." : !schedules.length ? "No maintenance schedules configured." : "Some schedules have invalid due dates."}`);
+        } else if (overdue.length || due.length) {
+          const affected = [...overdue, ...due].slice(0, 6).map(({ camera, task }) => `${camera}: ${task.task} (${task.nextDue})`).join("; ");
+          add("Camera maintenance", "warning", `${overdue.length} overdue and ${due.length} due today. ${affected}${overdue.length + due.length > 6 ? "; additional tasks omitted" : ""}. Complete inspections in Camera equipment inventory.`);
+        } else {
+          add("Camera maintenance", "pass", `${valid.length} scheduled inspection(s) across ${assets.length} registered camera(s); none due or overdue. Does not verify unregistered cameras.`);
+        }
+      }
+    } catch {
+      add("Camera maintenance", "unknown", "Cannot read browser-local equipment maintenance schedules.");
+    }
     const running = captures.filter(c => c.running);
     add("Active recording", running.length && running.some(c => c.previewFrozen || (c.frameAgeMs !== null && c.frameAgeMs > 10000)) ? "warning" : running.length ? "pass" : "unknown",
       `${running.length} camera(s) recording; ${running.filter(c => c.previewFrozen).length} frozen preview(s). No active recording is not a failure before the event.`);
@@ -2467,6 +2670,73 @@ function TournamentReportArchive() {
     .filter((report, index, all) => all.findIndex(other =>
       other.nodeId === report.nodeId && other.eventId === report.eventId) === index)
     .sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
+  // Camera identity is scoped to a capture node. USB device IDs may change after reconnecting.
+  const cameraSeries = Array.from(new Map(trendReports.flatMap(report =>
+    report.recording.cameras.map(camera => [
+      `${report.nodeId}::${camera.cameraId}`,
+      { key: `${report.nodeId}::${camera.cameraId}`, node: report.nodeId,
+        cameraId: camera.cameraId, label: camera.cameraName || camera.ring || camera.cameraId }
+    ] as const))).values()).sort((a, b) => a.key.localeCompare(b.key));
+  // Operator-confirmed physical camera labels link changing Windows device IDs.
+  // Mapping is node-scoped and browser-local; no serial-number inference is attempted.
+  const identityStorageKey = "tournament-physical-camera-identities-v1";
+  const [cameraIdentities, setCameraIdentities] = useState<Record<string, string>>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(identityStorageKey) || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      return Object.fromEntries(Object.entries(parsed).filter(([key, value]) =>
+        key.length <= 512 && typeof value === "string" && value.length <= 80));
+    } catch { return {}; }
+  });
+  const [identityError, setIdentityError] = useState("");
+  function updateCameraIdentity(key: string, label: string) {
+    const trimmed = label.trim().slice(0, 80);
+    const next = { ...cameraIdentities };
+    if (trimmed) next[key] = trimmed;
+    else delete next[key];
+    try { localStorage.setItem(identityStorageKey, JSON.stringify(next)); setCameraIdentities(next); setIdentityError(""); }
+    catch { setIdentityError("Could not save camera identities in this browser. Export your data before clearing storage."); }
+  }
+  const physicalCameraSeries = Array.from(new Map(cameraSeries.map(camera => {
+    const identity = cameraIdentities[camera.key];
+    const groupKey = identity ? `${camera.node}::physical::${identity.toLocaleLowerCase()}` : camera.key;
+    return [groupKey, { ...camera, key: groupKey, label: identity || camera.label,
+      linkedIds: cameraSeries.filter(candidate => candidate.node === camera.node &&
+        (identity ? cameraIdentities[candidate.key]?.toLocaleLowerCase() === identity.toLocaleLowerCase() : candidate.key === camera.key))
+        .map(candidate => candidate.cameraId) }] as const;
+  })).values()).sort((a, b) => a.key.localeCompare(b.key));
+  const [selectedCameraSeries, setSelectedCameraSeries] = useState("");
+  const activeCameraSeries = physicalCameraSeries.find(camera => camera.key === selectedCameraSeries) || physicalCameraSeries[0];
+  const cameraTrend = activeCameraSeries ? trendReports.filter(report => report.nodeId === activeCameraSeries.node)
+    .map(report => {
+      const camera = report.recording.cameras.find(item => activeCameraSeries.linkedIds.includes(item.cameraId));
+      return { eventId: report.eventId, event: report.eventName || report.eventId,
+        date: report.generatedAt, node: report.nodeId, cameraId: camera?.cameraId || "",
+        ring: camera?.ring || "", sessions: camera?.sessions ?? 0,
+        failures: camera?.failures ?? 0, warnings: camera?.warnings ?? 0,
+        failureRate: camera && camera.sessions > 0 ? 100 * camera.failures / camera.sessions : null,
+        present: Boolean(camera) };
+    }) : [];
+  const plottedCameraTrend = cameraTrend.filter(point => point.failureRate !== null);
+  function exportCameraTrend(format: "json" | "csv") {
+    if (!activeCameraSeries || !cameraTrend.length) return;
+    const columns = ["eventId", "event", "date", "node", "cameraId", "ring", "present",
+      "sessions", "failures", "warnings", "failureRate"] as const;
+    const escapeCsv = (value: unknown) => {
+      const raw = String(value ?? "");
+      const safe = /^\s*[=+@-]/.test(raw) ? "'" + raw : raw;
+      return '"' + safe.replace(/"/g, '""') + '"';
+    };
+    const content = format === "json" ? JSON.stringify({ generatedAt: new Date().toISOString(),
+      camera: activeCameraSeries, note: "Newest report per event and node. Missing cameras and zero-session events have no failure rate. Physical labels are operator-confirmed, browser-local and may combine different hardware if misassigned.",
+      events: cameraTrend }, null, 2) : "\uFEFF" + [columns.join(","),
+        ...cameraTrend.map(point => columns.map(column => escapeCsv(point[column])).join(","))].join("\r\n");
+    const url = URL.createObjectURL(new Blob([content], { type: format === "json" ? "application/json" : "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url;
+    link.download = `camera-reliability-${new Date().toISOString().replace(/[:.]/g, "-")}.${format}`;
+    document.body.appendChild(link); link.click(); link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   const trendRows = trendReports.flatMap(report => {
     const event = { event: report.eventName || report.eventId, eventId: report.eventId,
       node: report.nodeId, snapshot: report.generatedAt };
@@ -2569,6 +2839,73 @@ function TournamentReportArchive() {
           <td>{values.warnings}</td><td>{values.critical}</td>
         </tr>;
       })}</tbody></table></div>
+      <h4>Physical camera identity associations</h4>
+      <p className="muted">Assign the same unique physical label (for example, S600-A) to old and new device IDs
+        only after confirming they belong to the same camera. Labels are scoped to each capture node and saved
+        in this browser. Ring names are not physical identities. An incorrect association can merge unrelated histories.</p>
+      {identityError && <p role="alert">{identityError}</p>}
+      <div style={{ overflowX: "auto" }}><table><thead><tr><th>Capture node</th><th>Device ID</th><th>Report name</th><th>Confirmed physical label</th></tr></thead>
+        <tbody>{cameraSeries.map(camera => <tr key={camera.key}>
+          <td>{camera.node}</td><td style={{ overflowWrap: "anywhere", maxWidth: 250 }}>{camera.cameraId}</td>
+          <td>{camera.label}</td><td><input aria-label={`Physical identity for ${camera.node} ${camera.cameraId}`}
+            value={cameraIdentities[camera.key] || ""} maxLength={80}
+            placeholder="Unlinked" onChange={e => updateCameraIdentity(camera.key, e.target.value)} /></td>
+        </tr>)}</tbody></table></div>
+      <button type="button" onClick={() => {
+        const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(),
+          identities: cameraIdentities }, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob); const link = document.createElement("a");
+        link.href = url; link.download = "physical-camera-identities.json"; link.click(); URL.revokeObjectURL(url);
+      }}>Export physical camera associations JSON</button>
+      <h4>Individual camera reliability trends</h4>
+      <p className="muted">Select a camera on a specific capture node to compare its recorded failure
+        percentage across tournaments. Confirmed physical labels can combine re-enumerated device IDs on the same node. Missing camera entries and events with zero sessions are not
+        plotted as 0%. Results depend on retained recording history, not continuous camera uptime.</p>
+      {physicalCameraSeries.length ? <>
+        <label>Camera and capture node{" "}
+          <select value={activeCameraSeries?.key || ""}
+            onChange={e => setSelectedCameraSeries(e.target.value)}>
+            {physicalCameraSeries.map(camera => <option key={camera.key} value={camera.key}>
+              {camera.node} / {camera.label} ({camera.linkedIds.length} device ID(s))
+            </option>)}
+          </select>
+        </label>
+        {plottedCameraTrend.length ? <>
+          <svg role="img" aria-label={`Recording failure rate trend for ${activeCameraSeries?.label || "camera"}`}
+            viewBox="0 0 640 220" style={{ width: "100%", maxWidth: 720, height: "auto" }}>
+            {[0, 25, 50, 75, 100].map(value => <g key={value}>
+              <line x1="54" y1={182 - value * 1.5} x2="626" y2={182 - value * 1.5}
+                stroke="currentColor" opacity="0.18" />
+              <text x="45" y={186 - value * 1.5} textAnchor="end" fontSize="11"
+                fill="currentColor">{value}%</text>
+            </g>)}
+            {plottedCameraTrend.length > 1 && <polyline fill="none" stroke="#3689d5"
+              strokeWidth="3" points={plottedCameraTrend.map((point, index) =>
+                `${54 + index * 572 / (plottedCameraTrend.length - 1)},${182 - (point.failureRate ?? 0) * 1.5}`).join(" ")} />}
+            {plottedCameraTrend.map((point, index) => <g key={`${point.eventId}:${point.date}`}>
+              <circle cx={54 + index * 572 / Math.max(1, plottedCameraTrend.length - 1)}
+                cy={182 - (point.failureRate ?? 0) * 1.5} r="5" fill="#3689d5" />
+              <title>{`${point.event}: ${point.failureRate?.toFixed(1)}% (${point.failures}/${point.sessions})`}</title>
+              <text x={54 + index * 572 / Math.max(1, plottedCameraTrend.length - 1)}
+                y="203" textAnchor="middle" fontSize="10" fill="currentColor">{index + 1}</text>
+            </g>)}
+          </svg>
+          <p className="muted">Chart labels 1 through {plottedCameraTrend.length} correspond to the
+            chronological non-empty event rows below. A line indicates observed percentages only,
+            not measurements between events.</p>
+        </> : <p>No recording sessions with calculable failure rates for this camera.</p>}
+        <div style={{ overflowX: "auto" }}><table><thead><tr>
+          <th>Event</th><th>Ring</th><th>Sessions</th><th>Failures</th><th>Failure rate</th><th>Warnings</th>
+        </tr></thead><tbody>{cameraTrend.map(point => <tr key={`${point.eventId}:${point.date}`}>
+          <td>{point.event}</td><td>{point.present ? point.ring || "Unassigned" : "Not in report"}</td>
+          <td>{point.present ? point.sessions : "N/A"}</td>
+          <td>{point.present ? point.failures : "N/A"}</td>
+          <td>{point.failureRate === null ? "N/A" : `${point.failureRate.toFixed(1)}%`}</td>
+          <td>{point.present ? point.warnings : "N/A"}</td>
+        </tr>)}</tbody></table></div>
+        <button type="button" onClick={() => exportCameraTrend("csv")}>Export camera trend CSV</button>{" "}
+        <button type="button" onClick={() => exportCameraTrend("json")}>Export camera trend JSON</button>
+      </> : <p>No per-camera recording data in saved reports.</p>}
       <h4>Per-camera reliability by tournament</h4>
       <div style={{ overflowX: "auto" }}><table><thead><tr>
         <th>Event</th><th>Node</th><th>Ring</th><th>Camera ID</th><th>Sessions</th>
@@ -3811,7 +4148,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       </section>
 
       {node.local && <SystemResourceMonitor requestNode={requestNode} />}
-      {node.local && <UsbTopologyDiagnostics requestNode={requestNode} />
+      {node.local && <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
+        <CameraAssetInventory nodeId={node.id} />
       <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />}
       <CaptureQualityPanel />
       <section aria-label="Tournament readiness" className="overview">
@@ -4143,6 +4481,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         online={connected && usbWarningsReady && !usbWarningsError} />
       <IncidentTrends key={`trends:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
+      <TournamentToTournamentComparison />
+      <TournamentReliabilityTrends />
       <PostTournamentTechnicalReport key={`post-report:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} eventName={session.eventName || ""}
         requestNode={requestNode} />
@@ -4170,7 +4510,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       <CameraReliabilityDashboard requestNode={requestNode} />
       <TournamentReadinessOverview requestNode={requestNode} readiness={readiness}
         readinessCurrent={readinessDraft === JSON.stringify(session)} captures={captures}
-        streamCount={youtubeStreams.length} />
+        streamCount={youtubeStreams.length} nodeId={node.id} />
 
       <section className="overview" aria-label="Recording overview">
         <div className="metric"><span>Discovered cameras</span><strong>{visibleCameras.length}</strong></div>
@@ -4987,6 +5327,11 @@ interface UsbDiagnostic {
   locationPaths: string[];
   busHint: string | null;
   status: string;
+  vendorId?: string | null;
+  productId?: string | null;
+  containerId?: string | null;
+  serialCandidate?: string | null;
+  identityConfidence?: "serial-candidate" | "container-session" | "model-only";
 }
 interface UsbBandwidthReport {
   checkedAt: string;
@@ -5101,13 +5446,213 @@ function UsbBandwidthPlanner({ requestNode, stressResults, stressBusy }: {
   </section>;
 }
 
-function UsbTopologyDiagnostics({ requestNode }: { requestNode: (url: string, options?: RequestInit) => Promise<any> }) {
+interface CameraMaintenanceSchedule {
+  id: string; task: string; intervalDays: number; nextDue: string; lastCompletedAt?: string;
+}
+interface CameraAssetRecord {
+  label: string; model: string; serial: string; purchasedOn: string; warrantyUntil: string;
+  notes: string; maintenance: { id: string; at: string; action: string; notes: string }[];
+  schedules?: CameraMaintenanceSchedule[];
+}
+function maintenanceDueDate(date: Date, days: number): string {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+function maintenanceStatus(due: string, today: string): "Overdue" | "Due today" | "Upcoming" {
+  return due < today ? "Overdue" : due === today ? "Due today" : "Upcoming";
+}
+function CameraAssetInventory({ nodeId }: { nodeId: string }) {
+  const storageKey = `tournament-camera-assets-v1:${nodeId}`;
+  const [assets, setAssets] = useState<CameraAssetRecord[]>(() => {
+    try {
+      const value: unknown = JSON.parse(localStorage.getItem(storageKey) || "[]");
+      return Array.isArray(value) ? value.filter((item): item is CameraAssetRecord =>
+        !!item && typeof item.label === "string" && Array.isArray(item.maintenance)).slice(0, 100) : [];
+    } catch { return []; }
+  });
+  const [label, setLabel] = useState("");
+  const [selected, setSelected] = useState("");
+  const [action, setAction] = useState("");
+  const [maintenanceNotes, setMaintenanceNotes] = useState("");
+  const [scheduleTask, setScheduleTask] = useState("");
+  const [scheduleDays, setScheduleDays] = useState(90);
+  const [scheduleDue, setScheduleDue] = useState("");
+  const today = new Date().toISOString().slice(0, 10);
+  const scheduled = assets.flatMap(asset => (asset.schedules || []).map(item => ({ ...item, camera: asset.label })));
+  const overdue = scheduled.filter(item => item.nextDue < today).length;
+  const dueToday = scheduled.filter(item => item.nextDue === today).length;
+  const [message, setMessage] = useState("");
+  const current = assets.find(asset => asset.label === selected);
+  function persist(next: CameraAssetRecord[]) {
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); setAssets(next); setMessage("Inventory saved in this browser."); }
+    catch { setMessage("Could not save inventory. Export a backup before leaving this page."); }
+  }
+  function update(patch: Partial<CameraAssetRecord>) {
+    if (!current) return;
+    persist(assets.map(asset => asset.label === selected ? { ...asset, ...patch } : asset));
+  }
+  function download() {
+    const blob = new Blob([JSON.stringify({ version: 1, nodeId, exportedAt: new Date().toISOString(), assets }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob); const a = document.createElement("a");
+    a.href = url; a.download = `camera-equipment-${nodeId}.json`; a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return <section className="overview" aria-label="Camera equipment inventory">
+    <h2>Physical Camera Equipment Inventory</h2>
+    <p>Track labelled cameras, purchase and warranty dates, and maintenance performed. Records are
+      browser-local to this capture node. Use the same labels as confirmed physical camera associations.</p>
+    <label>New physical camera label <input value={label} maxLength={80} placeholder="S600-A"
+      onChange={e => setLabel(e.target.value)} /></label>{" "}
+    <button type="button" onClick={() => {
+      const value = label.trim();
+      if (!value || assets.some(asset => asset.label.toLowerCase() === value.toLowerCase())) {
+        setMessage("Enter a unique nonempty physical camera label."); return;
+      }
+      if (assets.length >= 100) { setMessage("Inventory limit reached (100 cameras)."); return; }
+      persist([...assets, { label: value, model: "", serial: "", purchasedOn: "", warrantyUntil: "", notes: "", maintenance: [] }]);
+      setSelected(value); setLabel("");
+    }}>Add camera</button>{" "}
+    <button type="button" onClick={download} disabled={!assets.length}>Export equipment JSON</button>
+    <p role="status">{message}</p>
+    <p>{assets.length} physical cameras in this browser inventory.</p>
+    <h3>Maintenance reminders</h3>
+    <p><strong>{overdue} overdue</strong>, {dueToday} due today, {scheduled.length} scheduled tasks total.
+      Reminders appear only when this dashboard is opened; no background notifications are sent.</p>
+    {scheduled.length > 0 && <table><thead><tr><th>Camera</th><th>Task</th><th>Next due</th><th>Interval</th><th>Status</th></tr></thead>
+      <tbody>{[...scheduled].sort((a,b) => a.nextDue.localeCompare(b.nextDue)).map(item => <tr key={`${item.camera}:${item.id}`}>
+        <td>{item.camera}</td><td>{item.task}</td><td>{item.nextDue}</td><td>{item.intervalDays} days</td>
+        <td>{maintenanceStatus(item.nextDue, today)}</td></tr>)}</tbody></table>}
+    {assets.length > 0 && <><label>Choose camera{" "}<select value={selected} onChange={e => setSelected(e.target.value)}>
+      <option value="">Select a camera</option>
+      {assets.map(asset => <option key={asset.label} value={asset.label}>{asset.label}</option>)}
+    </select></label></>}
+    {current && <div>
+      <h3>{current.label}</h3>
+      <p><label>Model <input value={current.model} maxLength={120} onChange={e => update({ model: e.target.value })} /></label>{" "}
+      <label>Manufacturer serial (verified manually) <input value={current.serial} maxLength={120} onChange={e => update({ serial: e.target.value })} /></label></p>
+      <p><label>Purchase date <input type="date" value={current.purchasedOn} onChange={e => update({ purchasedOn: e.target.value })} /></label>{" "}
+      <label>Warranty end date <input type="date" value={current.warrantyUntil} onChange={e => update({ warrantyUntil: e.target.value })} /></label></p>
+      <label>Equipment notes <textarea value={current.notes} maxLength={2000} rows={2} onChange={e => update({ notes: e.target.value })} /></label>
+      {current.warrantyUntil && <p>Warranty end: {current.warrantyUntil}
+        {current.warrantyUntil < new Date().toISOString().slice(0, 10) ? " (past date)" : " (upcoming or today)"}.
+        Check purchase documentation for actual coverage.</p>}
+      <h4>Scheduled maintenance ({(current.schedules || []).length})</h4>
+      <p>Schedule recurring checks such as lens cleaning, USB cable inspection, or a recording test.
+        Completion logs the task and schedules the next due date from the completion date.</p>
+      <label>Task <input value={scheduleTask} maxLength={120} placeholder="Inspect USB cable"
+        onChange={e => setScheduleTask(e.target.value)} /></label>{" "}
+      <label>Repeat every (days) <input type="number" min={1} max={3650} value={scheduleDays}
+        onChange={e => setScheduleDays(Number(e.target.value))} /></label>{" "}
+      <label>First due date <input type="date" value={scheduleDue} onChange={e => setScheduleDue(e.target.value)} /></label>{" "}
+      <button type="button" onClick={() => {
+        const task = scheduleTask.trim();
+        if (!task || !Number.isInteger(scheduleDays) || scheduleDays < 1 || scheduleDays > 3650 ||
+            (scheduleDue && !/^\d{4}-\d{2}-\d{2}$/.test(scheduleDue))) {
+          setMessage("Enter a task, a valid interval of 1 to 3650 days, and an optional due date."); return;
+        }
+        if ((current.schedules || []).length >= 50) { setMessage("Schedule limit reached (50 per camera)."); return; }
+        const entry: CameraMaintenanceSchedule = { id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          task, intervalDays: scheduleDays, nextDue: scheduleDue || maintenanceDueDate(new Date(), scheduleDays) };
+        update({ schedules: [...(current.schedules || []), entry] }); setScheduleTask(""); setScheduleDue("");
+      }}>Add recurring task</button>
+      {(current.schedules || []).length > 0 && <table><thead><tr><th>Task</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>{(current.schedules || []).map(item => <tr key={item.id}>
+          <td>{item.task} (every {item.intervalDays} days)</td><td>{item.nextDue}</td>
+          <td>{maintenanceStatus(item.nextDue, today)}</td><td>
+            <button type="button" onClick={() => {
+              if (current.maintenance.length >= 200) { setMessage("Maintenance log full; remove older entries before completing tasks."); return; }
+              const now = new Date();
+              const entry = { id: `${Date.now()}-${item.id}`, at: now.toISOString(), action: item.task,
+                notes: `Scheduled maintenance completed; previous due ${item.nextDue}.` };
+              update({ maintenance: [...current.maintenance, entry], schedules: (current.schedules || []).map(sched =>
+                sched.id === item.id ? { ...sched, lastCompletedAt: now.toISOString(), nextDue: maintenanceDueDate(now, sched.intervalDays) } : sched) });
+            }}>Mark completed</button>{" "}
+            <button type="button" onClick={() => {
+              if (window.confirm(`Remove scheduled task ${item.task}?`))
+                update({ schedules: (current.schedules || []).filter(sched => sched.id !== item.id) });
+            }}>Remove</button>
+          </td></tr>)}</tbody></table>}
+      <h4>Maintenance log ({current.maintenance.length})</h4>
+      <label>Action <input value={action} maxLength={120} placeholder="Replaced USB cable" onChange={e => setAction(e.target.value)} /></label>{" "}
+      <label>Notes <input value={maintenanceNotes} maxLength={1000} onChange={e => setMaintenanceNotes(e.target.value)} /></label>{" "}
+      <button type="button" onClick={() => {
+        if (!action.trim()) { setMessage("Enter a maintenance action."); return; }
+        if (current.maintenance.length >= 200) { setMessage("Maintenance log limit reached (200 per camera)."); return; }
+        const entry = { id: `${Date.now()}-${current.maintenance.length}`, at: new Date().toISOString(), action: action.trim(), notes: maintenanceNotes.trim() };
+        update({ maintenance: [...current.maintenance, entry] }); setAction(""); setMaintenanceNotes("");
+      }}>Log maintenance</button>
+      <ul>{[...current.maintenance].reverse().map(entry => <li key={entry.id}>
+        {new Date(entry.at).toLocaleString()}: <strong>{entry.action}</strong> {entry.notes}
+        {" "}<button type="button" onClick={() => {
+          if (window.confirm("Delete this maintenance entry?")) update({ maintenance: current.maintenance.filter(item => item.id !== entry.id) });
+        }}>Remove</button>
+      </li>)}</ul>
+      <button type="button" onClick={() => {
+        if (!window.confirm(`Delete equipment record ${current.label} and its maintenance log?`)) return;
+        persist(assets.filter(asset => asset.label !== selected)); setSelected("");
+      }}>Delete equipment record</button>
+    </div>}
+    <p>Equipment labels and serial fields are entered manually. This inventory does not automatically identify
+      connected hardware or synchronize across browsers. Export backups before clearing browser data.</p>
+  </section>;
+}
+
+interface UsbInventorySnapshot { checkedAt: string; devices: UsbDiagnostic[] }
+function UsbTopologyDiagnostics({ requestNode, nodeId }: { requestNode: (url: string, options?: RequestInit) => Promise<any>; nodeId: string }) {
   const [data, setData] = useState<{ supported: boolean; devices: UsbDiagnostic[]; warning: string | null; checkedAt: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const historyKey = `tournament-usb-fingerprint-history-v1:${nodeId}`;
+  const [history, setHistory] = useState<UsbInventorySnapshot[]>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      return Array.isArray(parsed) ? parsed.filter((x): x is UsbInventorySnapshot =>
+        !!x && typeof x.checkedAt === "string" && Array.isArray(x.devices)).slice(-25) : [];
+    } catch { return []; }
+  });
+  const [historyWarning, setHistoryWarning] = useState("");
+  const [confirmed, setConfirmed] = useState<Record<string, string>>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem("tournament-physical-camera-identities-v1") || "{}");
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, string> : {};
+    } catch { return {}; }
+  });
+  const [confirmLabels, setConfirmLabels] = useState<Record<string, string>>({});
+  const [confirmCameraIds, setConfirmCameraIds] = useState<Record<string, string>>({});
+  const historicalDevices = history.flatMap(snapshot => snapshot.devices.map(device => ({ ...device, observedAt: snapshot.checkedAt })));
+  function candidateMatches(device: UsbDiagnostic) {
+    return historicalDevices.filter(old => old.instanceId !== device.instanceId &&
+      device.vendorId && device.productId && old.vendorId === device.vendorId && old.productId === device.productId &&
+      ((device.serialCandidate && old.serialCandidate === device.serialCandidate) ||
+       (device.containerId && old.containerId === device.containerId)))
+      .filter((item, index, all) => all.findIndex(other => other.instanceId === item.instanceId) === index).slice(0, 8);
+  }
+  function confirmIdentity(device: UsbDiagnostic) {
+    const label = (confirmLabels[device.instanceId] || "").trim().slice(0, 80);
+    const cameraId = (confirmCameraIds[device.instanceId] || "").trim();
+    if (!label || !cameraId || cameraId.length > 400) {
+      setHistoryWarning("Enter a physical label and the exact camera ID from the recording report before confirming."); return;
+    }
+    const key = `${nodeId}::${cameraId}`;
+    const next = { ...confirmed, [key]: label };
+    try {
+      localStorage.setItem("tournament-physical-camera-identities-v1", JSON.stringify(next));
+      setConfirmed(next); setHistoryWarning(`Confirmed ${cameraId} as ${label}. Refresh the report archive to see updated groupings.`);
+    } catch { setHistoryWarning("Browser storage is unavailable. Export your data before closing this page."); }
+  }
   async function inspect() {
     setBusy(true); setError(null);
-    try { setData(await requestNode("/api/usb/diagnostics")); }
+    try {
+      const next = await requestNode("/api/usb/diagnostics");
+      setPreviousInventory(data?.devices || []);
+      setData(next);
+      if (next.supported && Array.isArray(next.devices) && !next.warning) {
+        const updated = [...history, { checkedAt: next.checkedAt, devices: next.devices }].slice(-25);
+        try { localStorage.setItem(historyKey, JSON.stringify(updated)); setHistory(updated); }
+        catch { setHistoryWarning("USB history could not be saved. Browser storage may be full."); }
+      }
+    }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
@@ -5119,15 +5664,70 @@ function UsbTopologyDiagnostics({ requestNode }: { requestNode: (url: string, op
       {busy ? "Inspecting USB devices..." : "Inspect USB Camera Connections"}
     </button>
     {error && <p role="alert">USB inspection failed: {error}</p>}
+    {historyWarning && <p role="status">{historyWarning}</p>}
+    <p>Saved inventory snapshots for this node: {history.length} (maximum 25, browser-local).</p>
+    {history.length > 0 && <div>
+      <button type="button" onClick={() => {
+        const blob = new Blob([JSON.stringify({ version: 1, nodeId, exportedAt: new Date().toISOString(), snapshots: history }, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob); const a = document.createElement("a");
+        a.href = url; a.download = `usb-fingerprint-history-${nodeId}.json`; a.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }}>Export saved fingerprint history</button>{" "}
+      <button type="button" onClick={() => {
+        if (!window.confirm("Clear saved USB inventory history for this capture node?")) return;
+        try { localStorage.removeItem(historyKey); setHistory([]); setHistoryWarning(""); }
+        catch { setHistoryWarning("Unable to clear USB history."); }
+      }}>Clear saved history</button>
+    </div>}
     {data && <div role="status">
       <p>Checked {new Date(data.checkedAt).toLocaleString()}. {data.devices.length} USB camera entries.</p>
       {data.warning && <p>{data.warning}</p>}
       {data.devices.map(device => <div key={device.instanceId}>
         <strong>{device.friendlyName || "Unnamed USB camera"}</strong> ({device.status})
         <p>Windows instance: <code>{device.instanceId}</code></p>
+        <p>USB vendor/product: {device.vendorId && device.productId
+          ? `${device.vendorId}:${device.productId}` : "Unavailable"}</p>
+        <p>Windows container ID: <code>{device.containerId || "Unavailable"}</code></p>
+        <p>Possible hardware serial: <code>{device.serialCandidate || "Not found"}</code></p>
+        <p>Identity evidence: {device.identityConfidence === "serial-candidate"
+          ? "Serial-like identifier, operator verification required"
+          : device.identityConfidence === "container-session"
+            ? "Windows container association, not permanent hardware identity"
+            : "Model information only, not unique"}</p>
+        {previousInventory.length > 0 && (() => {
+          const matches = previousInventory.filter(old => old.instanceId !== device.instanceId &&
+            ((device.serialCandidate && old.serialCandidate === device.serialCandidate &&
+              old.vendorId === device.vendorId && old.productId === device.productId) ||
+              (device.containerId && old.containerId === device.containerId)));
+          return matches.length ? <p>Possible previous device entry: {matches.map(m => m.instanceId).join(", ")}.
+            Confirm physically before linking identities.</p> : null;
+        })()}
+        {candidateMatches(device).length > 0 && <p>Saved-history possible matches: {candidateMatches(device).map(m =>
+          `${m.instanceId} (${new Date(m.observedAt).toLocaleString()})`).join("; ")}. This is supporting evidence, not proof.</p>}
+        <div>
+          <label>Physical camera label{" "}<input value={confirmLabels[device.instanceId] || ""}
+            placeholder="e.g. S600-A" maxLength={80}
+            onChange={e => setConfirmLabels(old => ({ ...old, [device.instanceId]: e.target.value }))} /></label>{" "}
+          <label>Exact report camera ID{" "}<input value={confirmCameraIds[device.instanceId] || ""}
+            placeholder="Copy from recording report" maxLength={400}
+            onChange={e => setConfirmCameraIds(old => ({ ...old, [device.instanceId]: e.target.value }))} /></label>{" "}
+          <button type="button" onClick={() => confirmIdentity(device)}>Confirm physical association</button>
+          {confirmed[`${nodeId}::${confirmCameraIds[device.instanceId] || ""}`] &&
+            <p>Confirmed report identity: {confirmed[`${nodeId}::${confirmCameraIds[device.instanceId]}`]}</p>}
+        </div>
         <p>Bus path hint: {device.busHint || "Not available"}</p>
         <p>Location: <code>{device.locationPaths[0] || "Not reported"}</code></p>
       </div>)}
+      <p>USB vendor/product IDs identify a model, not an individual camera. Windows container IDs can
+        change when devices are reconnected or moved. Serial-like instance suffixes are only candidates,
+        not authenticated serial numbers. This view never merges physical camera histories automatically.
+        Refresh the inventory after reconnecting a camera to compare entries.</p>
+      <button type="button" onClick={() => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a"); link.href = url; link.download = "usb-camera-hardware-fingerprints.json";
+        link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }}>Export USB hardware inventory JSON</button>
       <p>Two devices with the same bus prefix are not necessarily on the same USB controller.
         Use Windows Device Manager (View → Devices by connection) to confirm the physical controller.
         USB utilization and negotiated speed are not measured here.</p>
@@ -5212,3 +5812,4 @@ function App() {
     </main>
   );
 }
+

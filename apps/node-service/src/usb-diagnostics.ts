@@ -9,6 +9,11 @@ export interface UsbDeviceDiagnostic {
   locationPaths: string[];
   busHint: string | null;
   status: string;
+  vendorId: string | null;
+  productId: string | null;
+  containerId: string | null;
+  serialCandidate: string | null;
+  identityConfidence: "serial-candidate" | "container-session" | "model-only";
 }
 
 // Read-only Windows PnP inventory. Location paths indicate topology but do not
@@ -23,7 +28,13 @@ $items = @(Get-PnpDevice -PresentOnly -Class Camera,Image | Where-Object { $_.In
     $prop = Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_LocationPaths' -ErrorAction Stop
     if ($null -ne $prop.Data) { $paths = @($prop.Data) }
   } catch { }
+  $container = $null
+  try {
+    $containerProperty = Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_ContainerId' -ErrorAction Stop
+    if ($null -ne $containerProperty.Data) { $container = [string]$containerProperty.Data }
+  } catch { }
   [pscustomobject]@{
+    containerId = $container
     friendlyName = [string]$_.FriendlyName
     instanceId = [string]$_.InstanceId
     locationPaths = @($paths | ForEach-Object { [string]$_ })
@@ -43,8 +54,20 @@ ConvertTo-Json -InputObject $items -Depth 5 -Compress
       // A common PCIROOT/PCI prefix is a hint, NOT proof of a shared USB controller.
       const first = paths[0] ?? "";
       const match = first.match(/^(PCIROOT\([^)]*\)(?:#PCI\([^)]*\))?)/i);
-      return { friendlyName: String(item.friendlyName ?? ""), instanceId: String(item.instanceId ?? ""),
-        locationPaths: paths, busHint: match?.[1] ?? null, status: String(item.status ?? "Unknown") };
+      const instanceId = String(item.instanceId ?? "");
+      const hardware = instanceId.match(/VID_([0-9A-F]{4})&PID_([0-9A-F]{4})/i);
+      const tail = instanceId.split("\\").pop() ?? "";
+      // USB composite interface IDs (MI_XX), ampersand-generated instance IDs, and
+      // location paths are not reliable device serial numbers.
+      const serialCandidate = hardware && !/MI_[0-9A-F]{2}/i.test(instanceId) &&
+        /^[A-Za-z0-9._-]{5,80}$/.test(tail) && !tail.includes("&") ? tail : null;
+      const containerId = typeof item.containerId === "string" && item.containerId.trim()
+        ? item.containerId.trim() : null;
+      return { friendlyName: String(item.friendlyName ?? ""), instanceId,
+        locationPaths: paths, busHint: match?.[1] ?? null, status: String(item.status ?? "Unknown"),
+        vendorId: hardware?.[1]?.toUpperCase() ?? null, productId: hardware?.[2]?.toUpperCase() ?? null,
+        containerId, serialCandidate,
+        identityConfidence: serialCandidate ? "serial-candidate" : containerId ? "container-session" : "model-only" };
     });
     return { supported: true, devices, warning: devices.length === 0 ? "No USB camera PnP entries found. Device names may appear under a different Windows class." : null };
   } catch (error) {
