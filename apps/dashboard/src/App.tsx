@@ -4547,7 +4547,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                     onClick={() => updateOverlays(camera.id, items => items.filter((_, i) => i !== slot))}>Remove overlay {slot + 1}</button>
                 </div>)}
                 {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length < 4 && <div>
-                 <br/>
+                  <br/>
                   <button type="button" disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
                     onClick={() => { const first = overlayLibrary[0]?.imageId; if (!first) { void refreshOverlayLibrary().catch(error => setError(String(error))); setError("Upload an image or refresh the saved library first."); return; }
                       updateOverlays(camera.id, items => [...items, { imageId: first, position: "top-right", offsetX: 20, offsetY: 20 }]); }}>Add overlay from library</button>
@@ -5140,11 +5140,20 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                 {!capture && frameAvailable && session.assignments.find(a => a.cameraId === camera.id)?.overlays?.map((overlay, index) => (
                   <img key={`${overlay.imageId}-${index}`} className={`camera-preview-overlay ${overlay.position}`}
                     src={`${base}/api/overlays/images/${encodeURIComponent(overlay.imageId)}`}
-                    alt="" aria-hidden="true" style={{
-                      left: overlay.position.endsWith("left") ? `${overlay.offsetX * 0.2}px` : undefined,
-                      right: overlay.position.endsWith("right") ? `${overlay.offsetX * 0.2}px` : undefined,
-                      top: overlay.position.startsWith("top") ? `${overlay.offsetY * 0.2}px` : undefined,
-                      bottom: overlay.position.startsWith("bottom") ? `${overlay.offsetY * 0.2}px` : undefined
+                    alt="" aria-hidden="true"
+                    onLoad={e => {
+                      // FFmpeg positions the original image in input-video pixels. Match that
+                      // geometry in the standalone preview rather than arbitrarily capping
+                      // the image at 40% of the preview and multiplying offsets by 0.2.
+                      const img = e.currentTarget;
+                      const videoWidth = 1920;
+                      img.style.width = `${img.naturalWidth / videoWidth * 100}%`;
+                    }}
+                    style={{
+                      left: overlay.position.endsWith("left") ? `${overlay.offsetX / 1920 * 100}%` : undefined,
+                      right: overlay.position.endsWith("right") ? `${overlay.offsetX / 1920 * 100}%` : undefined,
+                      top: overlay.position.startsWith("top") ? `${overlay.offsetY / 1080 * 100}%` : undefined,
+                      bottom: overlay.position.startsWith("bottom") ? `${overlay.offsetY / 1080 * 100}%` : undefined
                     }} />
                 ))}
               </div>

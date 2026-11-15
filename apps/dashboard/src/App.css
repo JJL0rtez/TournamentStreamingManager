@@ -283,7 +283,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
 .stream-record-check { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .youtube-controls > .camera-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .camera-preview { position: relative; --overlay-preview-scale: 0.2px; }
-.camera-preview-overlay { position: absolute; max-width: 40%; max-height: 40%; width: auto; height: auto; object-fit: contain; pointer-events: none; }
+.camera-preview-overlay { position: absolute; width: auto; height: auto; max-width: none; max-height: none; object-fit: contain; pointer-events: none; }
 .session-panel > summary, .overview > summary { cursor: pointer; font-weight: 650; padding: 8px 0; }
 
 /* Compact tool groups: one outer panel, lightweight expandable rows. */
