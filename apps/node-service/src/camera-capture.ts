@@ -33,6 +33,7 @@ export interface CameraCaptureConfig {
 
 export class CameraCapture {
   private process: ChildProcessWithoutNullStreams | null = null;
+  private segmentPattern: string | null = null;
   private buffer = Buffer.alloc(0);
   private latestFrame: Buffer | null = null;
   private lastFrameAt: number | null = null;
@@ -81,6 +82,7 @@ onExit(listener: () => void): () => void {
       "-y",
       "-f", "dshow",
       "-rtbufsize", "512M",
+      "-use_wallclock_as_timestamps", "1",
       "-vcodec", "mjpeg",
       "-video_size", `${config.inputWidth || 1920}x${config.inputHeight || 1080}`,
       "-framerate", String(config.inputFps || captureFps),

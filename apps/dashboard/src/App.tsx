@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 interface MediaDevice {
@@ -1383,34 +1383,6 @@ function RecordingConfigurationReliabilityPanel({ requestNode }: {
     <button type="button" disabled={busy} onClick={() => void refresh()}>
       {busy ? "Loading..." : "Analyze recent recording sessions"}
     </button>
-    <h4>Timestamped resource readings during active recording</h4>
-    <p>Unlike the current snapshot above, these measurements are collected by the capture node approximately
-      every 15 seconds while at least one camera is recording. Compare timestamps with recording failures.
-      Sampling can miss brief spikes and does not prove the cause of an interruption.</p>
-    <label>History period <select value={historyHours} onChange={e => setHistoryHours(Number(e.target.value))}>
-      <option value={1}>Last hour</option><option value={2}>Last 2 hours</option>
-      <option value={6}>Last 6 hours</option><option value={24}>Last 24 hours</option>
-    </select></label>{" "}
-    <button type="button" disabled={busy} onClick={() => void loadResourceHistory()}>Load recording resource history</button>
-    {resourceHistory && <>
-      <p>{resourceHistory.readings.length} retained readings. Last sample: {resourceHistory.sampling.lastSampleAt || "None"}.
-        {resourceHistory.sampling.lastError && ` Sampling error: ${resourceHistory.sampling.lastError}`}</p>
-      <div style={{ maxHeight: 320, overflow: "auto" }}><table><thead><tr><th>Timestamp</th><th>Active cameras</th>
-        <th>CPU</th><th>GPU</th><th>RAM used</th><th>Disk write</th></tr></thead><tbody>
-        {resourceHistory.readings.map((r, index) => <tr key={`${r.checkedAt}:${index}`}>
-          <td>{new Date(r.checkedAt).toLocaleString()}</td><td>{r.activeCameraIds.length}</td>
-          <td>{r.cpu.utilizationPercent == null ? "N/A" : `${r.cpu.utilizationPercent}%`}</td>
-          <td>{r.gpu?.utilizationPercent == null ? "N/A" : `${r.gpu.utilizationPercent}%`}</td>
-          <td>{(r.memory.usedBytes / 1073741824).toFixed(1)} GiB</td>
-          <td>{r.disk.writeBytesPerSec == null ? "N/A" : `${(r.disk.writeBytesPerSec / 1048576).toFixed(1)} MiB/s`}</td>
-        </tr>)}</tbody></table></div>
-      <button type="button" onClick={() => {
-        const blob = new Blob([JSON.stringify(resourceHistory, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url;
-        a.download = `recording-resource-history-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-        document.body.appendChild(a); a.click(); a.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      }}>Download resource history JSON</button>
-    </>}
     {error && <p role="alert">{error}</p>}
     {report && <>
       <p>Scanned {report.scannedSessions} sessions; {report.unknownConfiguration} have unknown or invalid
@@ -3006,7 +2978,7 @@ function TournamentReportArchive() {
     report.recording.cameras.map(camera => [
       `${report.nodeId}::${camera.cameraId}`,
       { key: `${report.nodeId}::${camera.cameraId}`, node: report.nodeId,
-        cameraId: camera.cameraId, label: camera.cameraName || camera.ring || camera.cameraId }
+        cameraId: camera.cameraId, label: camera.ring || camera.cameraId }
     ] as const))).values()).sort((a, b) => a.key.localeCompare(b.key));
   // Operator-confirmed physical camera labels link changing Windows device IDs.
   // Mapping is node-scoped and browser-local; no serial-number inference is attempted.
@@ -3650,7 +3622,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [youtubeStreams, setYoutubeStreams] = useState<YouTubeStream[]>([]);
   const [recordingEvents, setRecordingEvents] = useState<RecordingEvent[]>([]);
   const [pastSessions, setPastSessions] = useState<Array<{
-    cameraId: string; cameraName: string; startedAt: string; endedAt?: string;
+    cameraId: string; cameraName: string; recordingPath: string; startedAt: string; endedAt?: string;
     eventId?: string; eventName?: string; ring?: string;
     outcome: string; integrity: { status: string; issues: string[]; segments: Array<{name: string; bytes: number}>; totalBytes?: number };
   }>>([]);
@@ -4086,7 +4058,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(session)
       });
       setSession(result.session);
-      setEventToSelect(result.session.eventId);
+      setEventToSelect(result.session.eventId || "");
       await refreshEvents();
       setBulkResults(["New tournament created. Permanent ID: " + result.session.eventId]);
     } catch (cause) { setError(String(cause)); }
@@ -4102,7 +4074,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         body: JSON.stringify(session)
       });
       setSession(result.session);
-      setEventToSelect(result.session.eventId);
+      setEventToSelect(result.session.eventId || "");
       await refreshEvents();
       setBulkResults(["Session saved."]);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -4479,9 +4451,11 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       </section>
 
       {node.local && <SystemResourceMonitor requestNode={requestNode} />}
-      {node.local && <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
+      {node.local && <>
+        <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
         <CameraAssetInventory nodeId={node.id} />
-      <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />}
+        <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />
+      </>}
       <CaptureQualityPanel />
       <section aria-label="Tournament readiness" className="overview">
         <h2>Tournament Readiness</h2>
@@ -5082,7 +5056,7 @@ interface CameraCapabilityResult {
   error?: string;
 }
 
-export default function CaptureQualityPanel() {
+function CaptureQualityPanel() {
   const [quality, setQuality] = useState<CaptureQuality | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cameras, setCameras] = useState<MediaDevice[]>([]);
@@ -5519,7 +5493,7 @@ function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, ass
   const allSignedChecks = checklistItems.every(item => preflight.checked[item.id] === true);
   const reportBlockers = !!report && (report.missingChecks.length > 0 ||
     (report.readiness?.blockers.length || 0) > 0 || (report.readiness?.warnings.length || 0) > 0 ||
-    (report.latestStress?.cameraResults.some(r => r.status !== "passed") ?? true) ||
+    (report.latestStress?.cameraResults.some(r => r.status !== "pass") ?? true) ||
     !report.readinessIsCurrent ||
     (report.latestStress ? (Date.now() - new Date(report.latestStress.endedAt).getTime()) > 86400000 ||
       new Date(report.latestStress.endedAt).getTime() > Date.now() : true));
@@ -5946,6 +5920,7 @@ function UsbTopologyDiagnostics({ requestNode, nodeId }: { requestNode: (url: st
     } catch { return []; }
   });
   const [historyWarning, setHistoryWarning] = useState("");
+  const [previousInventory, setPreviousInventory] = useState<UsbDiagnostic[]>([]);
   const [confirmed, setConfirmed] = useState<Record<string, string>>(() => {
     try {
       const parsed: unknown = JSON.parse(localStorage.getItem("tournament-physical-camera-identities-v1") || "{}");
@@ -6069,7 +6044,7 @@ function UsbTopologyDiagnostics({ requestNode, nodeId }: { requestNode: (url: st
   </section>;
 }
 
-function App() {
+export default function App() {
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
   const [authConfigured, setAuthConfigured] = useState(false);
   const [unlocked, setUnlocked] = useState(false);

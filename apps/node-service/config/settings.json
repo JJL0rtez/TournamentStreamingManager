@@ -1,7 +1,7 @@
 {
   "version": 1,
   "network": {
-    "mode": "tailscale",
+    "mode": "offline",
     "bindAddress": "127.0.0.1"
   },
   "devices": {}

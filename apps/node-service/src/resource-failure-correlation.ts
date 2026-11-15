@@ -28,8 +28,9 @@ export async function analyzeResourceFailureCorrelation(windowSeconds = 120) {
       cpuPercent: number(reading.cpu?.utilizationPercent),
       gpuPercent: number(reading.gpu?.utilizationPercent),
       gpuMemoryUsedMiB: number(reading.gpu?.memoryUsedMiB),
-      ramUsedGiB: number(reading.memory?.usedBytes) === null ? null : Number((reading.memory.usedBytes / 1073741824).toFixed(2)),
-      diskWriteMiBps: number(reading.disk?.writeBytesPerSec) === null ? null : Number((reading.disk.writeBytesPerSec / 1048576).toFixed(2)),
+      ramUsedGiB: reading.memory?.usedBytes == null ? null : Number((reading.memory.usedBytes / 1073741824).toFixed(2)),
+      ramUsedPercent: (reading.memory?.totalBytes ?? 0) > 0 && reading.memory?.usedBytes != null ? Number((100 * reading.memory.usedBytes / reading.memory.totalBytes).toFixed(2)) : null,
+      diskWriteMiBps: reading.disk?.writeBytesPerSec == null ? null : Number((reading.disk.writeBytesPerSec / 1048576).toFixed(2)),
       diskBusyPercent: number(reading.disk?.busyPercent)
     });
     const measured = nearby.map(metrics).sort((a,b) => Math.abs(a.offsetSeconds) - Math.abs(b.offsetSeconds));
@@ -42,7 +43,8 @@ export async function analyzeResourceFailureCorrelation(windowSeconds = 120) {
       timestampKnown, inRetention, nearbySamples: measured.length,
       closest: measured[0] || null,
       maximumNearby: { cpuPercent: max("cpuPercent"), gpuPercent: max("gpuPercent"),
-        ramUsedGiB: max("ramUsedGiB"), diskWriteMiBps: max("diskWriteMiBps"), diskBusyPercent: max("diskBusyPercent") } };
+        ramUsedGiB: max("ramUsedGiB"),
+        ramUsedPercent: max("ramUsedPercent"), diskWriteMiBps: max("diskWriteMiBps"), diskBusyPercent: max("diskBusyPercent") } };
   });
   return { generatedAt: new Date().toISOString(), windowSeconds: Math.trunc(windowSeconds),
     failedSessions: rows.length, failuresWithSamples: rows.filter(x => x.nearbySamples > 0).length,

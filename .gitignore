@@ -1,11 +1,7 @@
-dist/
-build/
-.env
-.env.*
-!.env.example
-*.log
-coverage/
-.DS_Store
-Thumbs.db
 node_modules/
+dist/
+.env
+config/
 recordings/
+*.log
+.DS_Store

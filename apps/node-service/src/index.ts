@@ -1,6 +1,6 @@
 
 import { discoverDevices } from "./device-discovery.js";
-import { detectCameraCapabilities } from "./camera-capabilities.js";
+import { probeCameraCapabilities } from "./camera-capabilities.js";
 
 async function main() {
   console.log("");
@@ -52,7 +52,7 @@ async function main() {
       console.log(`Checking ${camera.name}...`);
 
       try {
-        const capabilities = await detectCameraCapabilities(
+        const capabilities = await probeCameraCapabilities(
           camera.name
         );
 
@@ -63,13 +63,9 @@ async function main() {
         }
 
         for (const mode of capabilities.modes) {
-          const format = mode.pixelFormat
-            ? `Pixel format: ${mode.pixelFormat}`
-            : `Codec: ${mode.codec ?? "unknown"}`;
-
           console.log(
             `  ${mode.width}x${mode.height} | ` +
-            `${mode.minFps}-${mode.maxFps} FPS | ${format}`
+            `${mode.fps} FPS | Pixel format: ${mode.pixelFormat}`
           );
         }
 

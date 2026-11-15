@@ -8,9 +8,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "dev": "npm run dev --workspace=apps/dashboard",
-    "dev:node": "npm run dev --workspace=apps/node-service"
+    "dev": "npm run dev --workspace=@tournament/dashboard",
+    "dev:node": "npm run dev --workspace=@tournament/node-service",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspace=@tournament/dashboard"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
