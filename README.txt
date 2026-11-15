@@ -157,3 +157,40 @@ Milestone 95: Equipment maintenance in consolidated readiness
 - Completing scheduled maintenance in Camera equipment inventory is reflected on the next readiness refresh.
 - Report JSON export includes the maintenance check. Browser-local records do not synchronize between operators or PCs.
 - Full-project compilation and Windows hardware testing remain pending. This is a cumulative available source subset, not a verified standalone application.
+
+Milestone 96: Prioritized pre-tournament action list
+- Consolidated readiness now generates an ordered action list from readiness blockers, warnings, and unknown checks.
+- Adds overdue/due-today maintenance warnings and unresolved incidents for the selected event and capture node.
+- Interrupted-service incidents are prioritized as blockers; other unresolved incidents as warnings.
+- Each action includes its evidence and a suggested operator next step.
+- Refresh to rebuild the list after fixing issues; export JSON includes the action snapshot.
+- Browser-local records may differ between operators. Incident closure and maintenance completion remain manual.
+- This archive is a cumulative available source subset, not a verified standalone build.
+- Full-project compilation and Windows hardware testing remain pending.
+
+Milestone 97: Pre-tournament readiness snapshot history and comparison
+- The Consolidated tournament readiness panel can save timestamped readiness checks and action lists.
+- Up to 30 snapshots are stored per browser, capture node, and tournament in localStorage.
+- Select an initial and final snapshot to compare actions no longer reported, newly reported, and still reported.
+- Export the full saved snapshot history as JSON.
+- Re-run Refresh consolidated readiness before saving a follow-up snapshot. A disappeared warning is not proof of resolution.
+- This source archive is a cumulative subset and is not a verified standalone project. Compilation and Windows camera testing are pending.
+
+Milestone 98: Final tournament launch authorization
+- Adds a conservative GO / NO-GO advisory panel to Consolidated Tournament Readiness.
+- Requires a current (within 15 minutes) readiness snapshot for the selected event, no blockers or unknowns, and a valid per-ring sign-off matching current assignments.
+- Warnings must be acknowledged explicitly, and the authorizing operator must enter their name.
+- Saves the authorization in browser-local storage for the selected node and event, and exports an evidence-rich JSON decision.
+- A new readiness check, altered assignment, or invalidated ring sign-off invalidates the prior GO.
+- Use Recheck sign-offs after signing in the separate per-ring panel.
+- Advisory only. Does not automatically start streams, verify YouTube playback, or provide cryptographic identity verification.
+- Source compilation and Windows hardware testing have not been performed.
+
+Milestone 99: Guided tournament launch and shutdown
+- Adds a manual, event- and node-scoped operator procedure beside the consolidated readiness panel.
+- Launch steps cover GO authorization, recording startup, live recording status, YouTube relay startup and independent viewer/audio checks.
+- Shutdown steps cover stopping YouTube relays first, then stopping recordings, verifying files, backing up, and exporting reports.
+- Capture live status calls the existing /api/captures and /api/youtube/streams endpoints and records per-ring snapshots.
+- Checklist, operator notes, and up to 40 live observations persist in browser-local storage; export as JSON or reset.
+- Does not start or stop hardware automatically and cannot verify actual YouTube playback or video file integrity.
+- Source compilation and Windows hardware testing remain pending; archive is a cumulative available source subset.
