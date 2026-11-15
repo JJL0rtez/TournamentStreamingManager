@@ -1,0 +1,93 @@
+* { box-sizing: border-box; }
+body { margin: 0; }
+.dashboard { max-width: 1800px; margin: 0 auto; padding: 24px; text-align: left; }
+.dashboard-header, .section-heading, .camera-card-header, .camera-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.dashboard-header { margin-bottom: 24px; flex-wrap: wrap; }
+.dashboard h1 { margin: 0; font-size: 1.7rem; }
+.dashboard h2 { margin: 0; font-size: 1.2rem; }
+.muted { opacity: .7; margin: 6px 0; }
+.connection { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: #888; }
+.online .status-dot { background: #16a34a; }
+.offline .status-dot { background: #dc2626; }
+.overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+.metric { border: 1px solid #7775; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.metric span { opacity: .75; font-size: .85rem; }
+.metric strong { font-size: 1.7rem; }
+.section-heading { margin-bottom: 12px; }
+.camera-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.camera-card { min-width: 0; border: 1px solid #7775; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.camera-card-expanded { grid-column: span 2; }
+.camera-card-header { align-items: flex-start; }
+.camera-card-header strong { overflow-wrap: anywhere; }
+.camera-state { flex-shrink: 0; font-size: .75rem; border-radius: 20px; padding: 4px 8px; background: #8882; }
+.camera-state.recording { background: #16a34a33; color: #22c55e; }
+.camera-state.previewing { background: #2563eb33; color: #60a5fa; }
+.camera-preview { aspect-ratio: 16 / 9; width: 100%; background: #111; border-radius: 8px; overflow: hidden; }
+.camera-preview-video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.camera-preview-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: #aaa; font-size: .85rem; }
+.camera-actions { flex-wrap: wrap; justify-content: flex-start; }
+.dashboard button { cursor: pointer; padding: 8px 11px; border-radius: 6px; }
+.dashboard button:disabled { cursor: not-allowed; opacity: .45; }
+.primary-button { background: #166534; color: white; border: 1px solid #15803d; }
+.danger-button { background: #991b1b; color: white; border: 1px solid #b91c1c; }
+.field { display: flex; flex-direction: column; gap: 5px; font-size: .85rem; }
+.field input, .field select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #7777; border-radius: 6px; background: transparent; color: inherit; }
+.field select option { color: #111; }
+.recording-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; font-size: .85rem; }
+.recording-details > div { display: flex; flex-direction: column; gap: 3px; }
+.recording-details span { opacity: .7; }
+.filename { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; font-size: .78rem; opacity: .8; }
+.camera-warning, .alert { padding: 10px; border: 1px solid #f59e0b; background: #f59e0b16; border-radius: 8px; font-size: .85rem; }
+.alert { margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.camera-frame-stats { display: flex; flex-wrap: wrap; gap: 12px; opacity: .8; font-size: .8rem; }
+.device-details { font-size: .8rem; }
+.device-details summary { cursor: pointer; }
+.device-id { overflow-wrap: anywhere; opacity: .7; }
+@media (max-width: 1200px) { .camera-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) {
+  .dashboard { padding: 12px; }
+  .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .camera-grid { grid-template-columns: 1fr; }
+  .camera-card-expanded { grid-column: span 1; }
+}
+
+
+/* YouTube relay controls */
+.youtube-controls { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #7775; border-radius: 8px; }
+.youtube-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.youtube-live { color: #22c55e; font-weight: 700; text-transform: uppercase; }
+.key-input { display: flex; gap: 6px; }
+.key-input input { flex: 1; min-width: 0; }
+
+.node-container { position: relative; margin: 24px 0; border: 1px solid #7776; border-radius: 14px; padding: 18px; }
+.node-indicator { position: absolute; right: 18px; top: 18px; display: flex; align-items: center; gap: 8px; font-size: .85rem; }
+.node-panel .dashboard-header { padding-right: 90px; }
+.node-offline { padding: 30px 12px; opacity: .8; }
+.node-offline p { max-width: 650px; }
+
+.session-panel { display: flex; flex-direction: column; gap: 12px; padding: 16px; margin-bottom: 22px; border: 1px solid #7776; border-radius: 10px; }
+.session-panel h3 { margin: 0; }
+.session-assignments { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.bulk-results { padding: 10px; background: #7772; border-radius: 8px; font-size: .85rem; }
+
+/* Persistent settings and device management */
+.settings-panel { background: rgba(127,127,127,.045); }
+.device-manager { display: grid; gap: 10px; max-height: 460px; overflow: auto; }
+.device-manager-row { display: grid; grid-template-columns: minmax(160px,1.4fr) minmax(140px,1fr) minmax(150px,1fr) auto; gap: 12px; align-items: center; padding: 10px; border: 1px solid #7775; border-radius: 8px; }
+.device-manager-row small { display: block; font-size: .72rem; }
+.device-toggle { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.settings-network { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.readonly-notice { padding: 12px; border: 1px solid #d97706; border-radius: 8px; margin-bottom: 14px; }
+@media(max-width:900px) { .device-manager-row { grid-template-columns: 1fr 1fr; } }
+@media(max-width:600px) { .device-manager-row, .settings-network { grid-template-columns: 1fr; } }
+
+.operator-panel { display:flex; align-items:center; flex-wrap:wrap; gap:12px; border:1px solid #7776; border-radius:10px; padding:12px; margin:12px 0; }
+.operator-panel form { display:flex; flex-wrap:wrap; gap:8px; }
+.operator-panel input { padding:8px; border-radius:6px; border:1px solid #7777; }
+
+.recording-event-panel { margin: 12px 0 20px; padding: 12px; border: 1px solid #f59e0b; border-radius: 8px; }
+.recording-event-panel summary { cursor: pointer; font-weight: 600; }
+.recording-event-panel p { margin-top: 8px; }
