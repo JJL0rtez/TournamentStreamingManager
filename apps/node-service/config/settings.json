@@ -4,5 +4,9 @@
     "mode": "offline",
     "bindAddress": "127.0.0.1"
   },
-  "devices": {}
+  "devices": {
+    "@device_pnp_\\\\?\\usb#vid_328f&pid_00e6&mi_00#9&2185426a&0&0000#{65e8773d-8f56-11d0-a3b9-00a0c9223196}\\global": {
+      "alias": "Ring 1"
+    }
+  }
 }

@@ -307,9 +307,8 @@ function OperationsAlertHistory({ nodeId, eventId, alerts, online }: {
     setRecords(previous => previous.map(r => r.key === key && r.firstSeen === firstSeen && !r.resolvedAt ?
       { ...r, acknowledgedAt: stamp } : r));
   }
-  return <section className="session-panel" aria-label="Operations alert history">
-    <div className="section-heading"><h3>Operations alerts</h3>
-      <span className="muted">{active.length} active · {unacknowledged.length} unacknowledged</span></div>
+  return <details className="session-panel" aria-label="Operations alert history">
+    <summary>Operations alerts ({active.length} active, {unacknowledged.length} unacknowledged)</summary>
     <p className="muted">Acknowledgement records that an operator saw the alert. It does not fix or silence the underlying issue.
       Alert history is stored in this browser, separately for each node and event.</p>
     <div className="field" style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -339,7 +338,7 @@ function OperationsAlertHistory({ nodeId, eventId, alerts, online }: {
         <td>{!r.resolvedAt && !r.acknowledgedAt ? <button type="button" onClick={() => acknowledge(r.key, r.firstSeen)}>Acknowledge</button> : ""}</td>
       </tr>)}</tbody></table></div>}
     <p className="muted">Warnings are based on detected node state. An idle camera or relay is not automatically an alert.</p>
-  </section>;
+  </details>;
 }
 
 interface IncidentEntry {
@@ -3378,6 +3377,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [microphones, setMicrophones] = useState<Record<string, string>>(() => savedMicrophones(node.id));
   const [labels, setLabels] = useState<Record<string, string>>(() => savedLabels(node.id));
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [recordOnStream, setRecordOnStream] = useState<Record<string, boolean>>({});
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SizeHistory>({});
@@ -3408,7 +3408,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         reader.readAsDataURL(file);
       });
       const result: { imageId: string } = await requestNode("/api/overlays/images", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base64 })
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base64, filename: file.name })
       });
       updateOverlays(cameraId, items => {
         const next = [...items];
@@ -3875,11 +3875,11 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       setDevices(result);
       setMicrophones((previous) => {
         const updated: Record<string, string> = {};
-        // Never guess pairings from enumeration order: identical USB cameras can reorder.
         for (const camera of result.cameras) {
+          const sessionMic = session.assignments.find(a => a.cameraId === camera.id)?.microphoneName;
           const previousMic = previous[camera.id];
-          updated[camera.id] = previousMic && result.microphones.some((m) => m.name === previousMic)
-            ? previousMic : "";
+          const matched = [sessionMic, previousMic].find(name => name && result.microphones.some(m => m.name === name));
+          updated[camera.id] = matched || "";
         }
         return updated;
       });
@@ -3888,6 +3888,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   }
 
   useEffect(() => {
+    void refreshOverlayLibrary().catch(() => {});
     void refreshDevices();
     void requestNode("/api/recording-events").then((data: { events: RecordingEvent[] }) => setRecordingEvents(data.events)).catch(() => {});
     void refreshYouTubeProfiles();
@@ -3896,7 +3897,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       .catch((cause) => setError(String(cause)));
     void refreshEvents().catch(() => {});
     void requestNode("/api/session").then((data: { session: TournamentSession | null }) => {
-      if (data.session) setSession(data.session);
+      if (data.session) {
+        setSession(data.session);
+        setMicrophones(previous => ({ ...previous, ...Object.fromEntries(data.session!.assignments.map(a => [a.cameraId, a.microphoneName])) }));
+      }
     }).catch((cause) => setError(String(cause)));
   }, []);
   useEffect(() => {
@@ -3996,7 +4000,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         await requestNode(`/api/captures/${encodeURIComponent(camera.id)}/stop`, { method: "POST" });
       } else {
         const microphoneId = settings?.devices[camera.id]?.pairedMicrophoneId;
-        const microphoneName = microphoneId ? devices.microphones.find(m => m.id === microphoneId)?.name : microphones[camera.id];
+        const microphoneName = (microphoneId ? devices.microphones.find(m => m.id === microphoneId)?.name : undefined)
+          || session.assignments.find(a => a.cameraId === camera.id)?.microphoneName || microphones[camera.id];
         if (!microphoneName) throw new Error(`Assign a microphone to ${camera.name} first.`);
         if (captures.some((item) => item.microphoneName === microphoneName)) {
           throw new Error(`Microphone already in use: ${microphoneName}`);
@@ -4078,6 +4083,22 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       } else {
         const streamKey = streamKeys[cameraId]?.trim();
         if (!streamKey && !savedProfiles[cameraId]) throw new Error("Enter a stream key or save a profile first.");
+        if (!captures.some(c => c.cameraId === cameraId)) {
+          if (!recordOnStream[cameraId]) throw new Error("Start recording first, or enable 'Record when streaming'.");
+          const camera = devices.cameras.find(c => c.id === cameraId);
+          if (!camera) throw new Error("Camera not connected.");
+          const pairedId = settings?.devices[cameraId]?.pairedMicrophoneId;
+          const microphoneName = (pairedId ? devices.microphones.find(m => m.id === pairedId)?.name : undefined)
+            || session.assignments.find(a => a.cameraId === cameraId)?.microphoneName || microphones[cameraId];
+          if (!microphoneName) throw new Error("Select a microphone before starting.");
+          if (captures.some(c => c.microphoneName === microphoneName)) throw new Error("Microphone already in use.");
+          await requestNode("/api/captures/start", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cameraId, cameraName: camera.name, cameraDeviceId: cameraId, microphoneName, microphoneId: pairedId })
+          });
+          const recordingData = await requestNode("/api/captures");
+          setCaptures(recordingData.captures);
+        }
         await requestNode(`/api/youtube/${encodeURIComponent(cameraId)}/start`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4186,9 +4207,22 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
     devices.allDevices?.find((d) => d.id === cameraId)?.displayName || name;
   const visibleCameras = devices.cameras.filter((camera) => settings?.devices[camera.id]?.hidden !== true);
   const allDevices = devices.allDevices ?? [...devices.cameras, ...devices.microphones];
-  const editDevice = (id: string, patch: DevicePreference) => setSettings((previous) => previous ? ({
-    ...previous, devices: { ...previous.devices, [id]: { ...previous.devices[id], ...patch } }
-  }) : previous);
+  const [deviceSettingsDirty, setDeviceSettingsDirty] = useState(false);
+  const editDevice = (id: string, patch: DevicePreference) => {
+    setSettings(previous => previous ? ({ ...previous,
+      devices: { ...previous.devices, [id]: { ...previous.devices[id], ...patch } }
+    }) : previous);
+    setDeviceSettingsDirty(true);
+  };
+  useEffect(() => {
+    if (!deviceSettingsDirty || !settings || !node.local) return;
+    const timer = window.setTimeout(() => {
+      void requestNode("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) })
+        .then(() => setDeviceSettingsDirty(false))
+        .catch(error => setError(`Could not save device settings: ${String(error)}`));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [settings, deviceSettingsDirty]);
   async function saveSettings() {
     if (!settings || !node.local) return;
     setSettingsBusy(true); setSettingsMessage("");
@@ -4439,11 +4473,13 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           {visibleCameras.map((camera) => {
             const assignment = session.assignments.find((item) => item.cameraId === camera.id);
             const pairedId = settings?.devices[camera.id]?.pairedMicrophoneId;
-            const assignedMic = pairedId ? (allDevices.find((d) => d.id === pairedId)?.name ?? "") : (microphones[camera.id] ?? "");
+            const assignedMic = (pairedId ? allDevices.find(d => d.id === pairedId)?.name : undefined)
+              || session.assignments.find(a => a.cameraId === camera.id)?.microphoneName || microphones[camera.id] || "";
             return <label className="field" key={camera.id}>
               <span>{labelFor(camera.id, camera.name)} ring assignment</span>
               <input value={assignment?.ring ?? ""} placeholder="e.g. Ring 1"
                 disabled={!node.local || sessionBusy || activeRecordings.length > 0}
+                onBlur={() => { if (session.eventName.trim()) void saveSession(); }}
                 onChange={(event) => setSession((old) => {
                   const rest = old.assignments.filter((item) => item.cameraId !== camera.id);
                   const ring = event.target.value;
@@ -4471,31 +4507,35 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               </span>}
               {assignment && <div className="field" style={{ display: "grid", gap: 8 }}>
                 <strong>Image overlays (up to 4)</strong>
-                <button type="button" onClick={() => void refreshOverlayLibrary().catch(error => setError(String(error)))}>Refresh saved image library</button>
+                
                 <small>Choose an image already stored in config/overlays, or upload a new PNG, JPEG or animated GIF. Browsers control the upload file picker's initial folder, so selecting from the saved library is the default.</small>
                 {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).map((overlay, slot) => <div key={`${camera.id}-overlay-${slot}`} className="bulk-results" style={{ display: "grid", gap: 6 }}>
                   <strong>Overlay {slot + 1}</strong>
                   <img src={`/api/overlays/images/${encodeURIComponent(overlay.imageId)}`} alt={`Overlay ${slot + 1} preview`} style={{ maxWidth: 200, maxHeight: 100, objectFit: "contain" }} />
-                  <label>Saved image <select value={overlay.imageId} disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onFocus={() => { if (!overlayLibrary.length) void refreshOverlayLibrary().catch(error => setError(String(error))); }}
-                    onChange={e => changeOverlay(camera.id, slot, { imageId: e.target.value })}>
-                    {!overlayLibrary.some(img => img.imageId === overlay.imageId) && <option value={overlay.imageId}>{overlay.imageId}</option>}
-                    {overlayLibrary.map(img => <option key={img.imageId} value={img.imageId}>{img.name}</option>)}
-                  </select></label>
-                  <label>Replace with uploaded image <input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
-                    disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, slot, file); e.target.value = ""; }} /></label>
-                  <label>Position <select value={overlay.position} disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => changeOverlay(camera.id, slot, { position: e.target.value as typeof overlay.position })}>
-                    <option value="top-left">Top left</option><option value="top-right">Top right</option>
-                    <option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option>
-                  </select></label>
-                  <label>Horizontal offset (px) <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetX}
-                    disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetX: e.target.valueAsNumber }); }} /></label>
-                  <label>Vertical offset (px) <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetY}
-                    disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetY: e.target.valueAsNumber }); }} /></label>
+                  <div className="overlay-image-row">
+                    <label className="overlay-upload">Upload <input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
+                      disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                      onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, slot, file); e.target.value = ""; }} /></label>
+                    <label className="overlay-image-select">Saved image <select value={overlay.imageId} disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                      onFocus={() => { if (!overlayLibrary.length) void refreshOverlayLibrary().catch(error => setError(String(error))); }}
+                      onChange={e => changeOverlay(camera.id, slot, { imageId: e.target.value })}>
+                      {!overlayLibrary.some(img => img.imageId === overlay.imageId) && <option value={overlay.imageId}>Saved image (loading or unavailable)</option>}
+                      {overlayLibrary.map(img => <option key={img.imageId} value={img.imageId}>{img.name}</option>)}
+                    </select></label>
+                  </div>
+                  <div className="overlay-placement-row">
+                    <label>Position <select value={overlay.position} disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                      onChange={e => changeOverlay(camera.id, slot, { position: e.target.value as typeof overlay.position })}>
+                      <option value="top-left">Top left</option><option value="top-right">Top right</option>
+                      <option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option>
+                    </select></label>
+                    <label>X offset <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetX}
+                      disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                      onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetX: e.target.valueAsNumber }); }} /></label>
+                    <label>Y offset <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetY}
+                      disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
+                      onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetY: e.target.valueAsNumber }); }} /></label>
+                  </div>
                   <button type="button" disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
                     onClick={() => updateOverlays(camera.id, items => items.filter((_, i) => i !== slot))}>Remove overlay {slot + 1}</button>
                 </div>)}
@@ -4548,8 +4588,16 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         </div>}
       </section>
 
-      {node.local && <SystemResourceMonitor requestNode={requestNode} />}
-      <CaptureQualityPanel />
+      <section className="overview compact-tools" aria-label="System monitoring and tournament readiness">
+        <h2>System monitoring and tournament readiness</h2>
+        <p>Expand only the tool you need.</p>
+        <details><summary>System Resource Snapshot</summary>
+          {node.local && <SystemResourceMonitor requestNode={requestNode} />}
+        </details>
+        <details><summary>Capture and Streaming Quality</summary>
+          <CaptureQualityPanel />
+        </details>
+        <details><summary>Tournament Readiness</summary>
       <section aria-label="Tournament readiness" className="overview">
         <h2>Tournament Readiness</h2>
         <p>Snapshot of unsaved assignments, connected devices, recording disk, recording health, and YouTube relay status.</p>
@@ -4582,8 +4630,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </div>
         )}
       </section>
+        </details>
+      </section>
 
-      <section className="overview" aria-label="Testing and diagnostics"><h2>Testing and diagnostics</h2><p>Expand only the tool you need.</p>
+      <section className="overview compact-tools" aria-label="Testing and diagnostics"><h2>Testing and diagnostics</h2><p>Expand only the tool you need.</p>
       <details><summary>USB topology, inventory and bandwidth tests</summary>
       {node.local && <>
         <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
@@ -4763,6 +4813,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       <CameraReliabilityDashboard requestNode={requestNode} />
       </details>
       </section>
+      <section className="overview compact-tools" aria-label="Recording reports and tournament-day operations">
+        <h2>Recording reports and tournament-day operations</h2>
+        <p>Expand only the tool you need.</p>
+        <details><summary>Tournament recording summary</summary>
       <section aria-label="Tournament recording summary" className="overview">
         <div>
           <strong>Tournament recording summary</strong>{" "}
@@ -4803,6 +4857,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </>}
         </div>
       </section>
+        </details>
+        <details><summary>Recording history and segment checks</summary>
 
       <section aria-label="Recording session history" className="overview">
         <div>
@@ -4841,6 +4897,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </details>)}
         </div>
       </section>
+        </details>
+        <details><summary>Tournament-day operations</summary>
 
       <section className="session-panel" aria-label="Tournament day operations">
         <div className="section-heading"><h3>Tournament-day operations</h3>
@@ -4883,17 +4941,23 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         <p className="muted">Status reflects this node only. Remote nodes appear in their own read-only dashboard.
           A YouTube relay marked live indicates local relay progress, not independently verified public playback.</p>
       </section>
+        </details>
+      </section>
 
-      <section className="session-panel" aria-label="Operations alert thresholds">
+      <section className="overview compact-tools" aria-label="Operations alerts and reports">
+        <h2>Operations alerts and reports</h2>
+        <p>Expand only the tool you need.</p>
+      <details aria-label="Operations alert thresholds">
+        <summary>Operations alert thresholds</summary>
         <label>Warn when an active YouTube relay reports no progress for
           <select value={relayStaleSeconds} onChange={e => setRelayStaleSeconds(Number(e.target.value))}>
             {[15, 30, 60, 120].map(seconds => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
           </select>
         </label>
         <p className="muted">This threshold applies only to relays reported as live, and measures reported local relay progress, not public YouTube playback.</p>
-      </section>
-      <section className="session-panel" aria-label="USB reliability alert integration">
-        <h3>USB connection alerts</h3>
+      </details>
+      <details aria-label="USB reliability alert integration">
+        <summary>USB connection alerts</summary>
         <p className="muted">Connection warnings from the capture node are included in Operations alerts
           and the automatic critical incident workflow. Acknowledging an alert does not repair a camera.
           Counts are based on sampled history, not proof of a USB controller fault.</p>
@@ -4902,36 +4966,69 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         {usbWarningsError && <p className="camera-warning" role="status">
           USB reliability data may be stale: {usbWarningsError}
         </p>}
-      </section>
+      </details>
+      <details aria-label="Alert history and acknowledgements"><summary>Alert history and acknowledgements</summary>
       <OperationsAlertHistory nodeId={node.id} eventId={session.eventId || ""}
         alerts={operationsAlerts} online={connected && usbWarningsReady && !usbWarningsError} />
+      </details>
+      <details aria-label="Incident log"><summary>Incident log</summary>
       <IncidentLog key={`${node.id}:${session.eventId || "unsaved"}`} nodeId={node.id}
         eventId={session.eventId || ""} alerts={operationsAlerts}
         online={connected && usbWarningsReady && !usbWarningsError} />
+      </details>
+      <details aria-label="Incident trends"><summary>Incident trends</summary>
       <IncidentTrends key={`trends:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
+      </details>
+      <details aria-label="Tournament comparisons"><summary>Tournament comparisons</summary>
       <TournamentToTournamentComparison />
+      </details>
+      <details aria-label="Reliability trends"><summary>Reliability trends</summary>
       <TournamentReliabilityTrends />
+      </details>
+      <details aria-label="Post-tournament technical report"><summary>Post-tournament technical report</summary>
       <PostTournamentTechnicalReport key={`post-report:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} eventName={session.eventName || ""}
         requestNode={requestNode} />
+      </details>
+      <details aria-label="Incident heatmap"><summary>Incident heatmap</summary>
       <IncidentHeatmap key={`heatmap:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
+      </details>
+      <details aria-label="Incident analytics"><summary>Incident analytics</summary>
       <IncidentAnalytics key={`analytics:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
+      </details>
+      <details aria-label="Incident timeline"><summary>Incident timeline</summary>
       <IncidentTimeline key={`timeline:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
+      </details>
+      <details aria-label="Technical summary"><summary>Technical summary</summary>
       <TournamentTechnicalSummary key={`summary:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} eventName={session.eventName || ""}
         requestNode={requestNode} />
+      </details>
+      <details aria-label="Report archive"><summary>Report archive</summary>
       <TournamentReportArchive />
+      </details>
 
+      </section>
+
+      <section className="overview compact-tools" aria-label="Operator checklists and readiness">
+        <h2>Operator checklists and readiness</h2>
+        <p>Expand only the tool you need.</p>
+        <details><summary>Readiness overview</summary>
       <TournamentReadinessOverview requestNode={requestNode} readiness={readiness}
         readinessCurrent={readinessDraft === JSON.stringify(session)} captures={captures}
         streamCount={youtubeStreams.length} nodeId={node.id} eventId={session.eventId || "unsaved"}
         assignments={session.assignments} />
+        </details>
+        <details><summary>Guided tournament launch and shutdown</summary>
       <TournamentLaunchShutdownGuide nodeId={node.id} eventId={session.eventId || "unsaved"}
         assignments={session.assignments} captures={captures} streams={youtubeStreams} requestNode={requestNode} />
+
+        </details>
+      </section>
 
       <section className="overview" aria-label="Recording overview">
         <div className="metric"><span>Discovered cameras</span><strong>{visibleCameras.length}</strong></div>
@@ -4999,7 +5096,8 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           const busy = busyIds.includes(camera.id);
           const expanded = expandedId === camera.id;
           const pairedId = settings?.devices[camera.id]?.pairedMicrophoneId;
-            const assignedMic = pairedId ? (allDevices.find((d) => d.id === pairedId)?.name ?? "") : (microphones[camera.id] ?? "");
+            const assignedMic = (pairedId ? allDevices.find(d => d.id === pairedId)?.name : undefined)
+              || session.assignments.find(a => a.cameraId === camera.id)?.microphoneName || microphones[camera.id] || "";
           const micBusy = Boolean(assignedMic) && captures.some((item) =>
             item.cameraId !== camera.id && item.microphoneName === assignedMic);
           const frameAvailable = preview ? preview.previewAvailable : capture?.previewAvailable;
@@ -5031,6 +5129,16 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                     {preview || capture ? "Waiting for video..." : "Preview inactive"}
                   </div>
                 )}
+                {!capture && frameAvailable && session.assignments.find(a => a.cameraId === camera.id)?.overlays?.map((overlay, index) => (
+                  <img key={`${overlay.imageId}-${index}`} className={`camera-preview-overlay ${overlay.position}`}
+                    src={`${base}/api/overlays/images/${encodeURIComponent(overlay.imageId)}`}
+                    alt="" aria-hidden="true" style={{
+                      left: overlay.position.endsWith("left") ? `${overlay.offsetX * 0.2}px` : undefined,
+                      right: overlay.position.endsWith("right") ? `${overlay.offsetX * 0.2}px` : undefined,
+                      top: overlay.position.startsWith("top") ? `${overlay.offsetY * 0.2}px` : undefined,
+                      bottom: overlay.position.startsWith("bottom") ? `${overlay.offsetY * 0.2}px` : undefined
+                    }} />
+                ))}
               </div>
 
               {(frozen || sizeStalled || preview?.status === "error") && (
@@ -5051,10 +5159,20 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                   onClick={() => void toggleRecording(camera, capture)}>
                   {busy ? "Working..." : capture ? "Stop Recording" : "Record"}
                 </button>
+                <div className="stream-start-row">
+                {!capture && !youtube && <label className="stream-record-check"><input type="checkbox" checked={Boolean(recordOnStream[camera.id])}
+                  onChange={e => setRecordOnStream(old => ({ ...old, [camera.id]: e.target.checked }))} /> Record when streaming</label>}
+                <button type="button" disabled={!node.local || busy || !connected ||
+                  (!youtube && ((!capture && !recordOnStream[camera.id]) || (!streamKeys[camera.id]?.trim() && !savedProfiles[camera.id])))}
+                  onClick={() => void toggleYouTube(camera.id, Boolean(youtube))}>
+                  {youtube ? "Stop YouTube Stream" : "Start YouTube Stream"}
+                </button>
+                {!capture && !youtube && !recordOnStream[camera.id] && <small className="muted">Start recording before streaming, or check Record when streaming.</small>}
+                </div>
                 {capture?.running && <button type="button" disabled={!node.local || !connected || busy}
                   onClick={() => void recoverRecording(camera)}>Restart Recording (5 min cooldown, max 2/hour)</button>}
                 <button type="button" onClick={() => setExpandedId(expanded ? null : camera.id)}>
-                  {expanded ? "Collapse" : "Identify"}
+                  {expanded ? "Collapse" : "Expand"}
                 </button>
               </div>
 
@@ -5066,6 +5184,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                       ? "No recent output" : youtube.status) : "Offline"}
                   </span>
                 </div>
+                {youtube?.error && <div className="camera-warning">{youtube.error}</div>}
+              </div>
+              <details className="camera-settings-details"><summary>Camera settings</summary>
+
                 {!youtube && (
                   <label className="field">
                     <span>Stream key (leave blank to use saved profile)</span>
@@ -5087,19 +5209,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                   </label>
                 )}
                 {!youtube && <div className="camera-actions">
-                  {savedProfiles[camera.id] && <span className="muted">Saved: {savedProfiles[camera.id]}</span>}
+                  {savedProfiles[camera.id] && <span className="muted">Using saved key</span>}
                   <button type="button" disabled={!node.local || !streamKeys[camera.id]?.trim()} onClick={() => void saveYouTubeKey(camera)}>Save key</button>
                   {savedProfiles[camera.id] && <button type="button" disabled={!node.local} onClick={() => void deleteYouTubeKey(camera.id)}>Forget key</button>}
                 </div>}
-                <button type="button" disabled={!node.local || busy || !connected ||
-                  (!youtube && (!capture || (!streamKeys[camera.id]?.trim() && !savedProfiles[camera.id])))}
-                  onClick={() => void toggleYouTube(camera.id, Boolean(youtube))}>
-                  {youtube ? "Stop YouTube Stream" : "Start YouTube Stream"}
-                </button>
-                {!capture && !youtube && <small className="muted">Start recording before streaming.</small>}
-                {youtube?.error && <div className="camera-warning">{youtube.error}</div>}
-              </div>
-
               <label className="field">
                 <span>Camera label</span>
                 <input value={settings?.devices[camera.id]?.alias ?? labels[camera.id] ?? ""} placeholder="e.g. Ring 1"
@@ -5107,7 +5220,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               </label>
               <label className="field">
                 <span>Microphone</span>
-                <select value={pairedId ?? ""} disabled={!node.local || Boolean(capture)}
+                <select value={pairedId || devices.microphones.find(m => m.name === assignedMic)?.id || ""} disabled={!node.local || Boolean(capture)}
                   onChange={(event) => {
                     const microphoneId = event.target.value;
                     const microphoneName = devices.microphones.find(m => m.id === microphoneId)?.name ?? "";
@@ -5123,6 +5236,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               </label>
               {micBusy && <span className="camera-warning">Microphone in use by another recording</span>}
 
+              </details>
               {capture && (
                 <div className="recording-details">
                   <div><span>Duration</span><strong>{duration(capture.startedAt, now)}</strong></div>
@@ -5514,8 +5628,8 @@ function RingPreTournamentSignoff({ nodeId, eventId, eventName, assignments }: {
     window.document.body.appendChild(a); a.click(); a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  return <section className="overview" aria-label="Per-ring pre-tournament operator sign-off">
-    <h2>Per-ring Pre-tournament Checklist</h2>
+  return <details className="overview" aria-label="Per-ring pre-tournament operator sign-off">
+    <summary>Per-ring Pre-tournament Checklist</summary>
     <p>Manually verify positioning, microphone audio, local recording quality, YouTube playback and
       recovery procedures for every assigned ring. Ticking a box does not perform a test.</p>
     {stale && <p role="alert">Assignments have changed since this checklist was saved. Reset the
@@ -5557,7 +5671,7 @@ function RingPreTournamentSignoff({ nodeId, eventId, eventName, assignments }: {
     <p>Saved in this browser for this node and event, not synchronized to other dashboards.
       Export the signed checklist for tournament records. Sign-off is an operator acknowledgement,
       not independent proof that streaming or recording works.</p>
-  </section>;
+  </details>;
 }
 
 function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, assignments,
@@ -5715,7 +5829,7 @@ function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, ass
       <p>Saved stress results may refer to a different USB arrangement or recording configuration.
         Refresh tournament readiness and repeat the stress test immediately before the event.
         YouTube connectivity is not verified by this report.</p>
-      <h3>Tournament-day operator checklist</h3>
+      <details><summary>Tournament-day operator checklist</summary>
       <p>Manually confirm each step. Checking a box does not perform the check automatically.
         Checklist entries are stored in this browser for the current event and node.</p>
       {checklistItems.map(item => <label key={item.id} style={{ display: "block", margin: "0.5rem 0" }}>
@@ -5737,6 +5851,7 @@ function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, ass
         {reportBlockers ? " Current automated checks require revalidation." : ""}</p>}
       <p>Sign-off is a local operator acknowledgement, not cryptographic authentication.
         Changes to checklist entries or a new report invalidate the existing sign-off.</p>
+      </details>
       <button type="button" onClick={download}>Download Hardware Report JSON</button>
     </div>}
   </section>;

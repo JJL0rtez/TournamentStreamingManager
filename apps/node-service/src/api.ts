@@ -70,7 +70,7 @@ installRemoteNodeRoutes(app);
 // Overlay images are stored locally per node. Copy/import the image to each node that needs it.
 app.get("/api/overlays/images", (_req, res) => { res.json({ images: listOverlayImages() }); });
 app.post("/api/overlays/images", (req, res) => {
-  try { res.json({ imageId: saveOverlayImage(req.body?.base64) }); }
+  try { res.json({ imageId: saveOverlayImage(req.body?.base64, req.body?.filename) }); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 app.get("/api/overlays/images/:imageId", (req, res) => {

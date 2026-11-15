@@ -4,7 +4,14 @@ import { randomUUID } from "node:crypto";
 export type OverlayImage = { imageId: string; name: string };
 export function listOverlayImages(): OverlayImage[] {
   fs.mkdirSync(folder, { recursive: true });
-  return fs.readdirSync(folder).filter(n => /^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg|gif)$/i.test(n)).map(n => ({ imageId: n, name: n }));
+  return fs.readdirSync(folder).filter(n => /^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg|gif)$/i.test(n)).map(n => {
+    let name = n;
+    try {
+      const metadata = JSON.parse(fs.readFileSync(path.join(folder, `${n}.json`), "utf8"));
+      if (typeof metadata.name === "string" && metadata.name.length <= 180) name = metadata.name;
+    } catch { /* older uploads did not store filenames */ }
+    return { imageId: n, name };
+  });
 }
 
 const folder = path.resolve(process.env.TOURNAMENT_CONFIG_DIR || path.join(process.cwd(), "config"), "overlays");
@@ -12,7 +19,7 @@ export function overlayFile(imageId: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}\.(png|jpg|gif)$/i.test(imageId)) throw new Error("Invalid overlay image ID");
   return path.join(folder, imageId);
 }
-export function saveOverlayImage(base64: unknown): string {
+export function saveOverlayImage(base64: unknown, filename?: unknown): string {
   if (typeof base64 !== "string" || base64.length > 7_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) throw new Error("Invalid overlay image");
   const bytes = Buffer.from(base64, "base64");
   if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error("Overlay image must be 5 MB or smaller");
@@ -23,6 +30,8 @@ export function saveOverlayImage(base64: unknown): string {
   const imageId = `${randomUUID()}.${png ? "png" : gif ? "gif" : "jpg"}`;
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(overlayFile(imageId), bytes, { flag: "wx" });
+  const name = typeof filename === "string" ? path.basename(filename.replace(/\\/g, "/")).slice(0, 180) : "";
+  if (name && !/[\x00-\x1f]/.test(name)) fs.writeFileSync(path.join(folder, `${imageId}.json`), JSON.stringify({ name }));
   return imageId;
 }
 export function getOverlayImage(imageId: string): Buffer { return fs.readFileSync(overlayFile(imageId)); }
