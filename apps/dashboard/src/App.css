@@ -310,3 +310,25 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
 .camera-card .stream-start-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .camera-card .stream-start-row small { flex-basis:100%; }
 @media(max-width:520px){.overlay-placement-row{grid-template-columns:1fr 1fr}.overlay-placement-row label:first-child{grid-column:1/-1}}
+
+/* Keep all four primary camera controls on a single row, including Expand. */
+.camera-card .camera-primary-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  width: 100%;
+  margin: 10px 0;
+  align-items: stretch;
+}
+.camera-card .camera-primary-actions > button {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 3px;
+  font-size: clamp(10px, 0.72vw, 13px);
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .camera-card .camera-primary-actions > button { font-size: 12px; }
+}

@@ -27,6 +27,7 @@ interface Capture {
   cameraName: string;
   microphoneName: string;
   recordingPath: string;
+  recordingEnabled?: boolean;
   selectedMode?: { width: number; height: number; fps: number } | null;
   running: boolean;
   previewAvailable: boolean;
@@ -4080,11 +4081,17 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
     await perform(cameraId, async () => {
       if (active) {
         await requestNode(`/api/youtube/${encodeURIComponent(cameraId)}/stop`, { method: "POST" });
+        const activeCapture = captures.find(c => c.cameraId === cameraId);
+        if (activeCapture && !activeCapture.recordingEnabled) {
+          await requestNode(`/api/captures/${encodeURIComponent(cameraId)}/stop`, { method: "POST" });
+          const updated = await requestNode("/api/captures");
+          setCaptures(updated.captures);
+        }
       } else {
         const streamKey = streamKeys[cameraId]?.trim();
         if (!streamKey && !savedProfiles[cameraId]) throw new Error("Enter a stream key or save a profile first.");
         if (!captures.some(c => c.cameraId === cameraId)) {
-          if (!recordOnStream[cameraId]) throw new Error("Start recording first, or enable 'Record when streaming'.");
+          
           const camera = devices.cameras.find(c => c.id === cameraId);
           if (!camera) throw new Error("Camera not connected.");
           const pairedId = settings?.devices[cameraId]?.pairedMicrophoneId;
@@ -4094,7 +4101,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           if (captures.some(c => c.microphoneName === microphoneName)) throw new Error("Microphone already in use.");
           await requestNode("/api/captures/start", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cameraId, cameraName: camera.name, cameraDeviceId: cameraId, microphoneName, microphoneId: pairedId })
+            body: JSON.stringify({ cameraId, cameraName: camera.name, cameraDeviceId: cameraId, microphoneName, microphoneId: pairedId, recordingEnabled: Boolean(recordOnStream[cameraId]) })
           });
           const recordingData = await requestNode("/api/captures");
           setCaptures(recordingData.captures);
@@ -4540,10 +4547,11 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                     onClick={() => updateOverlays(camera.id, items => items.filter((_, i) => i !== slot))}>Remove overlay {slot + 1}</button>
                 </div>)}
                 {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length < 4 && <div>
+                 <br/>
                   <button type="button" disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
                     onClick={() => { const first = overlayLibrary[0]?.imageId; if (!first) { void refreshOverlayLibrary().catch(error => setError(String(error))); setError("Upload an image or refresh the saved library first."); return; }
                       updateOverlays(camera.id, items => [...items, { imageId: first, position: "top-right", offsetX: 20, offsetY: 20 }]); }}>Add overlay from library</button>
-                  <label>Or add new image <input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
+                  <label>Or add new image <br/><br/><input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
                     disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
                     onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, (assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length, file); e.target.value = ""; }} /></label>
                 </div>}
@@ -5107,7 +5115,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
             : `${base}/api/captures/${encodeURIComponent(camera.id)}/frame?t=${frameTick}`;
           const sizeStalled = Boolean(capture && history[camera.id] &&
             now - history[camera.id].lastGrowthAt > 10000);
-          const status = capture ? (frozen ? "Preview frozen" : sizeStalled ? "Recording stalled" : "Recording")
+          const status = capture ? (!capture.recordingEnabled ? "Streaming capture" : frozen ? "Preview frozen" : sizeStalled ? "Recording stalled" : "Recording")
             : preview ? (preview.status === "error" ? "Preview error" :
               frozen ? "Preview frozen" : preview.status === "starting" ? "Starting preview" : "Previewing")
             : "Idle";
@@ -5149,28 +5157,21 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                 </div>
               )}
 
-              <div className="camera-actions">
+              <div className="camera-actions camera-primary-actions">
                 <button type="button" disabled={!node.local || !connected || busy}
                   onClick={() => void togglePreview(camera, isPreviewing)}>
-                  {busy ? "Working..." : isPreviewing ? "Stop Preview" : "Start Preview"}
+                  {busy ? "Wait..." : isPreviewing ? "Stop Preview" : "Preview"}
                 </button>
                 <button type="button" className={capture ? "danger-button" : "primary-button"}
-                  disabled={!node.local || !connected || busy || (!capture && (!assignedMic || micBusy))}
+                  disabled={!node.local || !connected || busy || (Boolean(capture) && !capture.recordingEnabled) || (!capture && (!assignedMic || micBusy))}
                   onClick={() => void toggleRecording(camera, capture)}>
-                  {busy ? "Working..." : capture ? "Stop Recording" : "Record"}
+                  {busy ? "Wait..." : capture && !capture.recordingEnabled ? "Stream Only" : capture ? "Stop Record" : "Record"}
                 </button>
-                <div className="stream-start-row">
-                {!capture && !youtube && <label className="stream-record-check"><input type="checkbox" checked={Boolean(recordOnStream[camera.id])}
-                  onChange={e => setRecordOnStream(old => ({ ...old, [camera.id]: e.target.checked }))} /> Record when streaming</label>}
                 <button type="button" disabled={!node.local || busy || !connected ||
-                  (!youtube && ((!capture && !recordOnStream[camera.id]) || (!streamKeys[camera.id]?.trim() && !savedProfiles[camera.id])))}
+                  (!youtube && (!streamKeys[camera.id]?.trim() && !savedProfiles[camera.id]))}
                   onClick={() => void toggleYouTube(camera.id, Boolean(youtube))}>
-                  {youtube ? "Stop YouTube Stream" : "Start YouTube Stream"}
+                  {youtube ? "Stop Stream" : "Start Stream"}
                 </button>
-                {!capture && !youtube && !recordOnStream[camera.id] && <small className="muted">Start recording before streaming, or check Record when streaming.</small>}
-                </div>
-                {capture?.running && <button type="button" disabled={!node.local || !connected || busy}
-                  onClick={() => void recoverRecording(camera)}>Restart Recording (5 min cooldown, max 2/hour)</button>}
                 <button type="button" onClick={() => setExpandedId(expanded ? null : camera.id)}>
                   {expanded ? "Collapse" : "Expand"}
                 </button>
@@ -5187,6 +5188,11 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                 {youtube?.error && <div className="camera-warning">{youtube.error}</div>}
               </div>
               <details className="camera-settings-details"><summary>Camera settings</summary>
+                {capture?.running && capture.recordingEnabled !== false && <button type="button" disabled={!node.local || !connected || busy}
+                  onClick={() => void recoverRecording(camera)}>Restart Recording (5 min cooldown, max 2/hour)</button>}
+                <label className="stream-record-check"><input type="checkbox" checked={Boolean(recordOnStream[camera.id])}
+                  onChange={e => setRecordOnStream(old => ({ ...old, [camera.id]: e.target.checked }))} /> Record when streaming</label>
+                <small className="muted">When unchecked, Start Stream captures video and audio without saving a local recording. This choice takes effect when a new stream starts.</small>
 
                 {!youtube && (
                   <label className="field">
@@ -5237,7 +5243,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               {micBusy && <span className="camera-warning">Microphone in use by another recording</span>}
 
               </details>
-              {capture && (
+              {capture && capture.recordingEnabled !== false && (
                 <div className="recording-details">
                   <div><span>Duration</span><strong>{duration(capture.startedAt, now)}</strong></div>
                   <div><span>File size</span><strong>{fileSize(capture.recordingFileSize)}</strong></div>

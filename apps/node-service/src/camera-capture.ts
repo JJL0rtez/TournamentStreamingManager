@@ -29,6 +29,7 @@ export interface CameraCaptureConfig {
   recordingBitrate?: string;
   streamingBitrate?: string;
   audioSyncOffsetMs?: number;
+  recordingEnabled?: boolean;
   overlays?: Array<{ imagePath: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number }>;
 }
 
@@ -83,13 +84,13 @@ onExit(listener: () => void): () => void {
 
     const overlays = (config.overlays ?? []).slice(0, 4);
     const overlayFilters = overlays.length ? (() => {
-      const filters: string[] = ["[0:v]split=3[rec0][prev0][stream0]"];
+      const filters: string[] = [config.recordingEnabled === false ? "[0:v]split=2[prev0][stream0]" : "[0:v]split=3[rec0][prev0][stream0]"];
       overlays.forEach((overlay, i) => {
         const input = i + 1;
         const x = overlay.position.endsWith("right") ? `W-w-${overlay.offsetX}` : String(overlay.offsetX);
         const y = overlay.position.startsWith("bottom") ? `H-h-${overlay.offsetY}` : String(overlay.offsetY);
-        filters.push(`[${input}:v]format=rgba,setpts=PTS-STARTPTS,split=3[img${i}r][img${i}p][img${i}s]`);
-        for (const [branch, suffix] of [["rec", "r"], ["prev", "p"], ["stream", "s"]] as const) {
+        filters.push(`[${input}:v]format=rgba,setpts=PTS-STARTPTS,split=${config.recordingEnabled === false ? 2 : 3}${config.recordingEnabled === false ? "" : `[img${i}r]`}[img${i}p][img${i}s]`);
+        for (const [branch, suffix] of (config.recordingEnabled === false ? [["prev", "p"], ["stream", "s"]] : [["rec", "r"], ["prev", "p"], ["stream", "s"]]) as Array<[string, string]>) {
           filters.push(`[${branch}${i}][img${i}${suffix}]overlay=x=${x}:y=${y}:shortest=0:eof_action=repeat[${branch}${i + 1}]`);
         }
       });
@@ -117,6 +118,7 @@ onExit(listener: () => void): () => void {
         ? ["-stream_loop", "-1", "-i", overlay.imagePath]
         : ["-loop", "1", "-framerate", "1", "-i", overlay.imagePath]),
       ...(overlayFilters ? ["-filter_complex", overlayFilters] : []),
+      ...(config.recordingEnabled === false ? [] : [
       "-map", overlays.length ? `[rec${overlays.length}]` : "0:v:0",
       "-map", "0:a:0",
       "-c:v", "h264_nvenc",
@@ -131,7 +133,8 @@ onExit(listener: () => void): () => void {
       "-segment_time", "300",
       "-segment_format", "matroska",
       "-reset_timestamps", "1",
-      this.segmentPattern,
+      this.segmentPattern!,
+      ]),
 
       "-map", overlays.length ? "[prevvid]" : "0:v:0",
       ...(!overlays.length ? ["-vf", "fps=5,scale=640:360"] : []),

@@ -1237,6 +1237,7 @@ const recordingFileSize = await managed.capture.getRecordingFileSize();
       cameraName: managed.cameraName,
       microphoneName: managed.microphoneName,
       recordingPath: managed.recordingPath,
+      recordingEnabled: managed.recordingEnabled,
       selectedMode: managed.selectedMode ?? null,
       configuredQuality: managed.configuredQuality ?? null,
       running: managed.capture.isRunning,
@@ -1265,7 +1266,7 @@ const recordingFileSize = await managed.capture.getRecordingFileSize();
 
 
 app.post("/api/captures/start", async (req, res) => {
-  const { cameraId, cameraName, cameraDeviceId, microphoneName, microphoneId } = req.body ?? {};
+  const { cameraId, cameraName, cameraDeviceId, microphoneName, microphoneId, recordingEnabled } = req.body ?? {};
 
   if (
     typeof cameraId !== "string" ||
@@ -1291,14 +1292,15 @@ app.post("/api/captures/start", async (req, res) => {
   const wasPreviewing = !!previewSessionManager.get(cameraId);
   try {
     if (wasPreviewing) await previewProcessManager.stop(cameraId);
-    await assertRecordingSpace();
+    if (recordingEnabled !== false) await assertRecordingSpace();
     const resolvedMic = await resolveMicrophone(cameraId, microphoneName, microphoneId);
     const managed = await cameraCaptureManager.start(
   cameraId,
   cameraName,
   cameraDeviceId,
   resolvedMic.input,
-  recordingDirectory(outputDirectory, cameraId)
+  recordingDirectory(outputDirectory, cameraId),
+  recordingEnabled !== false
     );
 
     res.json({

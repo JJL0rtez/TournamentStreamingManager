@@ -14,6 +14,7 @@ export interface ManagedCapture {
   cameraName: string;
   cameraDeviceId: string;
   microphoneName: string;
+  recordingEnabled: boolean;
   recordingPath: string;
   startedAt: string;
   capture: CameraCapture;
@@ -46,7 +47,8 @@ async start(
   cameraName: string,
   cameraDeviceId: string,
   microphoneName: string,
-  outputDirectory: string
+  outputDirectory: string,
+  recordingEnabled = true
 ): Promise<ManagedCapture> {
 
     if (
@@ -113,6 +115,7 @@ async start(
         cameraDeviceId,
         microphoneName,
         outputDirectory,
+        recordingEnabled,
         audioSyncOffsetMs: getSession()?.assignments.find(a => a.cameraId === cameraId)?.audioSyncOffsetMs ?? -300,
         overlays: (() => { const assignment = getSession()?.assignments.find(a => a.cameraId === cameraId); return (assignment?.overlays ?? (assignment?.overlay ? [assignment.overlay] : [])).map(overlay => ({ ...overlay, imagePath: resolveOverlayImage(overlay.imageId) })); })()
       });
@@ -132,6 +135,7 @@ async start(
         cameraDeviceId,
         microphoneName,
         recordingPath,
+        recordingEnabled,
         startedAt: new Date().toISOString(),
         eventId, eventName, ring,
         capture,
@@ -146,9 +150,9 @@ capture.onExit(() => {
   if (this.captures.get(cameraId)?.capture === capture) {
     this.captures.delete(cameraId);
     const expected = this.expectedStops.has(cameraId);
-    recordHistory({ cameraId, cameraName, recordingPath: managed.recordingPath,
+    if (recordingEnabled) recordHistory({ cameraId, cameraName, recordingPath: managed.recordingPath,
       startedAt: managed.startedAt, eventId, eventName, ring, captureConfiguration, endedAt: new Date().toISOString(), outcome: expected ? "stopped" : "failed" });
-    recordEvent({ type: expected ? "recording_stopped" : "recording_failed", cameraId,
+    if (recordingEnabled) recordEvent({ type: expected ? "recording_stopped" : "recording_failed", cameraId,
       recordingPath: managed.recordingPath,
       detail: expected ? "Stopped by operator" : "FFmpeg exited unexpectedly; recording was not automatically restarted" });
     console.log(`Capture ${cameraId} removed after FFmpeg exit.`);
@@ -162,7 +166,7 @@ if (!capture.isRunning) {
 }
 
 this.captures.set(cameraId, managed);
-recordHistory({ cameraId, cameraName, recordingPath, startedAt: managed.startedAt, eventId, eventName, ring, captureConfiguration, outcome: "started" });
+if (recordingEnabled) recordHistory({ cameraId, cameraName, recordingPath, startedAt: managed.startedAt, eventId, eventName, ring, captureConfiguration, outcome: "started" });
 
 return managed;
 
