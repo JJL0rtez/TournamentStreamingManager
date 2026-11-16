@@ -1,0 +1,238 @@
+{
+  "filesChecked": 5,
+  "errors": 0,
+  "warnings": 0,
+  "readOnly": true,
+  "results": [
+    {
+      "file": "C:\\Projects\\TournamentStreaming\\recordings\\Test_Tournament\\Ring_1\\Test_Tournament_Ring_1_2026-11-16T05-29-37-397Z_0000.mkv",
+      "bytes": 81600286,
+      "duration": 70.066,
+      "blackSeconds": 0,
+      "freezeSeconds": 0,
+      "silenceSeconds": 0,
+      "videoFrames": 2099,
+      "audioRmsDb": -37,
+      "audioPeakDb": 0,
+      "decodeErrors": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "findings": [
+        {
+          "code": "decode",
+          "level": "ok",
+          "message": "FFmpeg decoded recording successfully"
+        },
+        {
+          "code": "video-frames",
+          "level": "ok",
+          "message": "2099 decoded video frames"
+        },
+        {
+          "code": "audio-level",
+          "level": "ok",
+          "message": "Audio RMS -37 dBFS"
+        },
+        {
+          "code": "black",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "freeze",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "silence",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        }
+      ]
+    },
+    {
+      "file": "C:\\Projects\\TournamentStreaming\\recordings\\Test_Tournament\\Ring_2\\Test_Tournament_Ring_2_2026-11-16T05-29-38-506Z_0000.mkv",
+      "bytes": 76488412,
+      "duration": 48.137,
+      "blackSeconds": 0,
+      "freezeSeconds": 0,
+      "silenceSeconds": 0,
+      "videoFrames": 1441,
+      "audioRmsDb": -36.8,
+      "audioPeakDb": 0,
+      "decodeErrors": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "findings": [
+        {
+          "code": "decode",
+          "level": "ok",
+          "message": "FFmpeg decoded recording successfully"
+        },
+        {
+          "code": "video-frames",
+          "level": "ok",
+          "message": "1441 decoded video frames"
+        },
+        {
+          "code": "audio-level",
+          "level": "ok",
+          "message": "Audio RMS -36.8 dBFS"
+        },
+        {
+          "code": "black",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "freeze",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "silence",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        }
+      ]
+    },
+    {
+      "file": "C:\\Projects\\TournamentStreaming\\recordings\\Test_Tournament\\Ring_1\\Test_Tournament_Ring_1_2026-11-16T05-25-04-616Z_0000.mkv",
+      "bytes": 216206003,
+      "duration": 166.066,
+      "blackSeconds": 0,
+      "freezeSeconds": 0,
+      "silenceSeconds": 0,
+      "videoFrames": 4979,
+      "audioRmsDb": -38.2,
+      "audioPeakDb": 0,
+      "decodeErrors": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "findings": [
+        {
+          "code": "decode",
+          "level": "ok",
+          "message": "FFmpeg decoded recording successfully"
+        },
+        {
+          "code": "video-frames",
+          "level": "ok",
+          "message": "4979 decoded video frames"
+        },
+        {
+          "code": "audio-level",
+          "level": "ok",
+          "message": "Audio RMS -38.2 dBFS"
+        },
+        {
+          "code": "black",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "freeze",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "silence",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        }
+      ]
+    },
+    {
+      "file": "C:\\Projects\\TournamentStreaming\\recordings\\Test_Tournament\\Ring_2\\Test_Tournament_Ring_2_2026-11-16T05-25-17-071Z_0000.mkv",
+      "bytes": 189478508,
+      "duration": 121.266,
+      "blackSeconds": 0,
+      "freezeSeconds": 0,
+      "silenceSeconds": 0,
+      "videoFrames": 3635,
+      "audioRmsDb": -38.3,
+      "audioPeakDb": 0,
+      "decodeErrors": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "findings": [
+        {
+          "code": "decode",
+          "level": "ok",
+          "message": "FFmpeg decoded recording successfully"
+        },
+        {
+          "code": "video-frames",
+          "level": "ok",
+          "message": "3635 decoded video frames"
+        },
+        {
+          "code": "audio-level",
+          "level": "ok",
+          "message": "Audio RMS -38.3 dBFS"
+        },
+        {
+          "code": "black",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "freeze",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "silence",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        }
+      ]
+    },
+    {
+      "file": "C:\\Projects\\TournamentStreaming\\recordings\\hardware-smoke\\recordings_hardware-smoke_2026-11-16T05-02-10-508Z_0000.mkv",
+      "bytes": 27677827,
+      "duration": 16.733,
+      "blackSeconds": 0,
+      "freezeSeconds": 0,
+      "silenceSeconds": 0,
+      "videoFrames": 499,
+      "audioRmsDb": -33.5,
+      "audioPeakDb": 0,
+      "decodeErrors": 0,
+      "exitCode": 0,
+      "timedOut": false,
+      "findings": [
+        {
+          "code": "decode",
+          "level": "ok",
+          "message": "FFmpeg decoded recording successfully"
+        },
+        {
+          "code": "video-frames",
+          "level": "ok",
+          "message": "499 decoded video frames"
+        },
+        {
+          "code": "audio-level",
+          "level": "ok",
+          "message": "Audio RMS -33.5 dBFS"
+        },
+        {
+          "code": "black",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "freeze",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        },
+        {
+          "code": "silence",
+          "level": "ok",
+          "message": "0.00 seconds (0.0%)"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {compare,parseIds,summarize,validateBase} from '../scripts/capture-growth-lib.mts';
+const before=[{cameraId:'a',running:true,frameCount:100,frameAgeMs:50,recordingFileSize:1000,microphoneName:'mic-a'},{cameraId:'b',running:true,frameCount:50,frameAgeMs:50,recordingFileSize:2000,microphoneName:'mic-b'}];
+const after=[{...before[0],frameCount:150,recordingFileSize:2000},{...before[1],frameCount:100,recordingFileSize:3000}];
+test('355 parses logical camera IDs',()=>assert.deepEqual(parseIds('a, b'),['a','b']));
+test('356 verifies two independent running captures',()=>assert.equal(compare(before,after,['a','b']).filter(f=>f.code==='capture-running').length,2));
+test('357 detects missing camera independently',()=>assert.equal(compare(before,after,['a','missing']).filter(f=>f.code==='missing-or-duplicate').length,1));
+test('358 catches stopped capture',()=>assert.ok(compare(before,[{...after[0],running:false},after[1]],['a']).some(f=>f.code==='capture-stopped')));
+test('359 checks preview frames advance',()=>assert.equal(compare(before,after,['a','b']).filter(f=>f.code==='frames-advanced').length,2));
+test('360 detects frozen preview frames',()=>assert.ok(compare(before,[{...after[0],frameCount:100},after[1]],['a']).some(f=>f.code==='frames-stalled')));
+test('361 detects stale preview',()=>assert.ok(compare(before,[{...after[0],frameAgeMs:9000},after[1]],['a']).some(f=>f.code==='stale-frame')));
+test('362 verifies recording bytes grow for both cameras',()=>assert.equal(compare(before,after,['a','b']).filter(f=>f.code==='recording-growing').length,2));
+test('363 warns on unchanged bytes without falsely asserting recording failure',()=>assert.ok(compare(before,[{...after[0],recordingFileSize:1000},after[1]],['a']).some(f=>f.code==='recording-unchanged'&&f.level==='warning')));
+test('364 checks duplicate IDs, missing microphone, and safe URL',()=>{const f=compare(before,[{...after[0],microphoneName:null},after[1]],['a','a']);assert.ok(f.some(x=>x.code==='duplicate-id'));assert.ok(f.some(x=>x.code==='microphone-unset'));assert.equal(validateBase('http://localhost:3001'),'http://localhost:3001');assert.throws(()=>validateBase('http://user:pass@localhost:3001'));assert.deepEqual(summarize(compare(before,after,['a','b'])),{errors:0,warnings:0,ok:6});});

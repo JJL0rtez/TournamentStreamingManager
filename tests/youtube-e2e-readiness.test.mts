@@ -1,0 +1,15 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { relayHealth, sanitizeRelayError, YouTubeStreamManager } from "../apps/node-service/src/YouTubeStreamManager.ts";
+const manager = new YouTubeStreamManager();
+test("315: relay starts as connecting", () => assert.equal(relayHealth("connecting", null), "connecting"));
+test("316: progress means locally sending, not YouTube verified", () => assert.equal(relayHealth("live", 10000, 12000), "sending"));
+test("317: missing progress does not count as sending", () => assert.equal(relayHealth("live", null), "connecting"));
+test("318: stale relay progress is detected", () => assert.equal(relayHealth("live", 1000, 17001), "stalled"));
+test("319: relay error takes precedence over progress", () => assert.equal(relayHealth("error", 1000, 1001), "error"));
+test("320: stream key is redacted from FFmpeg error", () => assert.doesNotMatch(sanitizeRelayError("failure abcdefgh1234", "abcdefgh1234"), /abcdefgh1234/));
+test("321: RTMPS URL is redacted from FFmpeg error", () => assert.equal(sanitizeRelayError("error rtmps://host/live2/secret", "unrelated"), "error [REDACTED RTMPS URL]"));
+test("322: inactive relay has no exit history", () => assert.equal(manager.lastExit("none"), null));
+test("323: relay health API reports no verified YouTube status", async () => { const s=await readFile(new URL("../apps/node-service/src/api.ts",import.meta.url),"utf8"); assert.match(s,/\/api\/youtube\/:cameraId\/relay-health/); assert.match(s,/youtubeVerified: false/); });
+test("324: relay status exposes local health without leaking stream keys", async () => { const s=await readFile(new URL("../apps/node-service/src/YouTubeStreamManager.ts",import.meta.url),"utf8"); assert.match(s,/relayHealth: relayHealth/); assert.match(s,/sanitizeRelayError/); assert.doesNotMatch(JSON.stringify(manager.list()),/streamKey/); });

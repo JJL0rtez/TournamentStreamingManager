@@ -1,0 +1,23 @@
+{
+  "board": {
+    "slides": [
+      {
+        "id": "welcome",
+        "title": "Welcome",
+        "body": "Tournament information will appear here.",
+        "duration": 12,
+        "kind": "schedule",
+        "theme": "gold"
+      },
+      {
+        "id": "fec7d0a3-017a-4c10-997f-5348b0fe029e",
+        "title": "New slide",
+        "body": "",
+        "duration": 10,
+        "kind": "announcement"
+      }
+    ],
+    "updatedAt": 1794808916162
+  },
+  "revision": 7
+}

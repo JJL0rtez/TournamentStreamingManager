@@ -1,0 +1,12 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {inspect,rate,summarize,validateDirectory} from '../scripts/recording-verify-lib.mts';
+const good={streams:[{codec_type:'video',codec_name:'h264',width:1920,height:1080,avg_frame_rate:'60/1'},{codec_type:'audio',codec_name:'aac',sample_rate:'48000',channels:2}],format:{duration:'16.8',size:'123456'}};
+test('365 frame rate rational parsing',()=>assert.equal(rate('60000/1001')>59,true));
+test('366 reject zero frame rate',()=>assert.equal(rate('0/0'),0));
+test('367 valid video stream',()=>assert.equal(inspect(good,100).find(x=>x.code==='video-present')?.level,'ok'));
+test('368 valid audio stream',()=>assert.equal(inspect(good,100).find(x=>x.code==='audio-present')?.level,'ok'));
+test('369 valid recording duration',()=>assert.equal(inspect(good,100).find(x=>x.code==='duration')?.level,'ok'));
+test('370 missing video rejected',()=>assert.equal(inspect({...good,streams:good.streams.slice(1)},100).some(x=>x.code==='video-count'&&x.level==='error'),true));
+test('371 missing audio rejected',()=>assert.equal(inspect({...good,streams:good.streams.slice(0,1)},100).some(x=>x.code==='audio-count'&&x.level==='error'),true));
+test('372 empty file rejected',()=>assert.equal(inspect(good,0).some(x=>x.code==='empty'&&x.level==='error'),true));
+test('373 short recording flagged',()=>assert.equal(inspect({...good,format:{duration:'1'}},100).some(x=>x.code==='short-duration'&&x.level==='warning'),true));
+test('374 summary and directory safety',()=>{assert.equal(summarize(inspect(good,100)).errors,0);assert.throws(()=>validateDirectory(''));});

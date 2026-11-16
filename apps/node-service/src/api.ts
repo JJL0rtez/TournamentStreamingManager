@@ -1,3 +1,4 @@
+import { installBillboardRoutes } from "./billboard-routes.js";
 import { readVersionedRecoveryReliabilityRules, saveVersionedRecoveryReliabilityRules, ReliabilityRuleConflict, readRecoveryReliabilityRuleHistory, restoreRecoveryReliabilityRules } from "./recovery-reliability-rules.js";
 import { readSharedWarnings, addSharedWarning, acknowledgeSharedWarning } from "./shared-recovery-warnings.js";
 import { appendRecoveryAudit, readRecoveryAudit } from "./recovery-audit.js";
@@ -24,6 +25,7 @@ import { validateRecordingSegments } from "./recording-validation.js";
 import { getRecordingHistory, inspectRecordingSegments } from "./recording-history.js";
 import { recentRecordingEvents } from "./recording-events.js";
 import { installOperatorAuth, requireOperator } from "./operator-auth.js";
+import { evaluateRelayPreflight } from "./relay-preflight.js";
 import { listYouTubeProfiles, getYouTubeKey, saveYouTubeProfile, deleteYouTubeProfile, importYouTubeProfiles } from "./youtube-profiles.js";
 import { getSettings, saveSettings, exportBackup, getNetworkBindAddress } from "./persistent-settings.js";
 import { getSession, setSession, recordingDirectory, listTournamentEvents, selectTournamentEvent } from "./tournament-session.js";
@@ -75,6 +77,7 @@ installOperatorAuth(app);
 // Protect remote proxy writes too. Node token alone must not grant browser write privileges.
 app.use("/api", requireOperator);
 installRemoteNodeRoutes(app);
+installBillboardRoutes(app);
 
 const recordingManager = new RecordingManager();
 // Recorded sessions remain visible after a backend restart.
@@ -686,6 +689,35 @@ app.post("/api/youtube/profiles/import", (req, res) => {
 app.get("/api/youtube/streams", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ streams: youtubeStreams.list() });
+});
+
+// Diagnostic endpoint is local relay telemetry only, never YouTube-side confirmation.
+app.get("/api/youtube/:cameraId/relay-health", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const stream = youtubeStreams.get(req.params.cameraId);
+  res.json({ cameraId: req.params.cameraId, active: Boolean(stream),
+    stream: stream ?? null, lastExit: youtubeStreams.lastExit(req.params.cameraId),
+    youtubeVerified: false });
+});
+
+// Local-only preflight. Never includes saved keys or attempts a YouTube connection.
+app.get("/api/youtube/:cameraId/preflight", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const cameraId = req.params.cameraId;
+  const capture = cameraCaptureManager.get(cameraId);
+  let keyConfigured = false;
+  let profileError: string | null = null;
+  try { keyConfigured = Boolean(getYouTubeKey(cameraId)); }
+  catch { profileError = "Saved YouTube profile is unavailable; check stream-key secret configuration."; }
+  const result = evaluateRelayPreflight({
+    cameraId,
+    captureDevicePresent: Boolean(capture),
+    captureRunning: Boolean(capture?.capture.isRunning),
+    streamKeyConfigured: keyConfigured,
+    relayActive: Boolean(youtubeStreams.get(cameraId)),
+    otherCameraIds: cameraCaptureManager.list().map(item => item.cameraId)
+  });
+  res.json({ cameraId, ...result, profileError });
 });
 
 app.post("/api/youtube/:cameraId/start", (req, res) => {

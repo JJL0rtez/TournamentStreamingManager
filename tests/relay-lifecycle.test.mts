@@ -1,0 +1,17 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { YouTubeStreamManager } from "../apps/node-service/src/YouTubeStreamManager.ts";
+import { streamPort } from "../apps/node-service/src/stream-port.ts";
+import { captureTransportPort } from "../apps/node-service/src/capture-contract.ts";
+const manager = () => new YouTubeStreamManager();
+test("305: relay rejects empty camera ID", () => assert.throws(() => manager().start(" ", "abcdefgh1234"), /Camera ID/));
+test("306: relay rejects malformed key without launching FFmpeg", () => assert.throws(() => manager().start("cam", "invalid/key"), /Invalid stream key/));
+test("307: relay uses the production capture transport port", () => assert.equal(streamPort("cam"), captureTransportPort("cam")));
+test("308: relay reports no sessions before start", () => assert.deepEqual(manager().list(), []));
+test("309: unknown relay is not reported as running", () => assert.equal(manager().get("missing"), undefined));
+test("310: stopping an absent relay is safe", async () => assert.equal(await manager().stop("missing"), false));
+test("311: repeated idle stop is safe", async () => { const m=manager(); await m.stop("missing"); await m.stop("missing"); assert.deepEqual(m.list(), []); });
+test("312: stopAll on idle relay is safe", async () => { const m=manager(); await m.stopAll(); assert.deepEqual(m.list(), []); });
+test("313: hardware test supports configured microphone override", async () => { const s=await readFile(new URL("../scripts/hardware-smoke.mts",import.meta.url),"utf8"); assert.match(s,/TOURNAMENT_TEST_MIC/); assert.match(s,/TS_HARDWARE_MICROPHONE/); });
+test("314: relay status distinguishes local progress from YouTube verification", async () => { const s=await readFile(new URL("../apps/node-service/src/YouTubeStreamManager.ts",import.meta.url),"utf8"); assert.match(s,/youtubeVerified: false/); assert.match(s,/lastProgressFrame/); });

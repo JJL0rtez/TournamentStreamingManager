@@ -1,0 +1,16 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { evaluateRelayPreflight } from "../apps/node-service/src/relay-preflight.ts";
+const good = { cameraId: "ring-1", captureRunning: true, captureDevicePresent: true, streamKeyConfigured: true, relayActive: false, otherCameraIds: [] as string[] };
+const run = (overrides: Partial<typeof good> = {}) => evaluateRelayPreflight({ ...good, ...overrides });
+test("325: ready capture passes local preflight", () => assert.equal(run().ready, true));
+test("326: missing camera ID blocks relay", () => assert.equal(run({ cameraId: " " }).ready, false));
+test("327: unknown capture blocks relay", () => assert.equal(run({ captureDevicePresent: false }).ready, false));
+test("328: stopped capture blocks relay", () => assert.equal(run({ captureRunning: false }).ready, false));
+test("329: missing stream key blocks relay", () => assert.equal(run({ streamKeyConfigured: false }).ready, false));
+test("330: existing relay blocks duplicate start", () => assert.equal(run({ relayActive: true }).ready, false));
+test("331: same camera ID does not collide with itself", () => assert.equal(run({ otherCameraIds: ["ring-1"] }).ready, true));
+test("332: distinct camera ID with same transport port blocks relay", () => { const port = run().transportPort; let other = ""; for (let i=0;i<200000;i++) { const candidate=`collision-${i}`; if (run({cameraId:candidate}).transportPort === port) {other=candidate;break;} } assert.ok(other, "Expected a hash port collision within search range"); assert.equal(run({otherCameraIds:[other]}).ready,false); });
+test("333: response contains no credentials or YouTube verification claim", () => { const r=run(); assert.equal(r.youtubeVerified,false); assert.doesNotMatch(JSON.stringify(r),/streamKey\s*:/); });
+test("334: preflight API is read-only and disables caching", async () => { const source=await readFile(new URL("../apps/node-service/src/api.ts",import.meta.url),"utf8"); assert.match(source,/app.get\("\/api\/youtube\/:cameraId\/preflight"/); assert.match(source,/evaluateRelayPreflight/); assert.match(source,/Cache-Control", "no-store"/); });

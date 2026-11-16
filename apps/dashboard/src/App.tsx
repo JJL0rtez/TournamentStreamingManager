@@ -8011,6 +8011,7 @@ export default function App() {
       <header className="dashboard-header">
         <div>
           <h1>Tournament Streaming</h1>
+          <a href="/presentation?mode=rings" target="_blank" rel="noopener noreferrer">Open presentation display</a> <a href="/presentation?mode=billboard" target="_blank" rel="noopener noreferrer">Open billboard</a>
           <p className="muted">Multi-PC tournament control center</p>
         </div>
         <strong>{nodes.filter((node) => node.online).length} / {nodes.length} nodes online</strong>

@@ -1,0 +1,14 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseArgs, classifyRelay } from "../scripts/youtube-live-check-lib.mts";
+const args = (extra: string[] = []) => parseArgs(["--camera", "ring-1", ...extra], {});
+test("335: requires logical camera ID", () => assert.throws(() => parseArgs([], {})));
+test("336: read-only mode by default", () => assert.equal(args().goLive, false));
+test("337: local API is the default", () => assert.equal(args().base, "http://127.0.0.1:3001"));
+test("338: rejects remote API addresses", () => assert.throws(() => args(["--base", "https://example.com"])));
+test("339: explicit confirmation required before relay start", () => assert.throws(() => args(["--go-live"])));
+test("340: confirmation enables relay start", () => assert.equal(args(["--go-live", "--confirm-live-test"]).goLive, true));
+test("341: identifies active relay", () => assert.equal(classifyRelay({active:true,stream:{status:"connecting"}}).active,true));
+test("342: requires recent progress to report output", () => { assert.equal(classifyRelay({active:true,stream:{lastProgressAt:123,progressAgeMs:100}}).progressing,true); assert.equal(classifyRelay({active:true,stream:{lastProgressAt:123,progressAgeMs:20000}}).progressing,false); });
+test("343: relay error is not mistaken for healthy stream", () => assert.equal(classifyRelay({active:true,stream:{status:"error",error:"failed"}}).error,true));
+test("344: rejects unbounded live test duration", () => assert.throws(() => args(["--seconds","999"])));

@@ -1,0 +1,14 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {audit,parseCameraIds,summarize,validateUrl} from '../scripts/multicam-audit-lib.mts';
+const captures=[{cameraId:'a',running:true,recordingFileSize:200},{cameraId:'b',running:true,recordingFileSize:300}];
+const relays=[{cameraId:'a',status:'live',progressAgeMs:200},{cameraId:'b',status:'live',progressAgeMs:300}];
+test('345 parses distinct camera selections',()=>assert.deepEqual(parseCameraIds('a, b'),['a','b']));
+test('346 detects duplicate selections',()=>assert.equal(audit(captures,relays,['a','a']).some(f=>f.code==='duplicate-selection'),true));
+test('347 validates two independent running captures',()=>assert.equal(audit(captures,relays,['a','b']).filter(f=>f.code==='capture-running').length,2));
+test('348 detects missing camera without affecting others',()=>assert.equal(audit(captures,relays,['a','missing']).filter(f=>f.code==='capture-identity').length,1));
+test('349 flags stopped capture',()=>assert.equal(audit([{cameraId:'a',running:false}],[],['a']).some(f=>f.code==='capture-stopped'),true));
+test('350 detects duplicate relays',()=>assert.equal(audit(captures,[...relays,relays[0]],['a']).some(f=>f.code==='duplicate-relay'),true));
+test('351 detects stalled relay independently',()=>{const f=audit(captures,[{...relays[0],progressAgeMs:30000},relays[1]],['a','b']);assert.equal(f.some(x=>x.cameraId==='a'&&x.code==='relay-stalled'),true);assert.equal(f.some(x=>x.cameraId==='b'&&x.code==='relay-progress'),true);});
+test('352 relay failure does not misreport recording as stopped',()=>{const f=audit(captures,[{...relays[0],status:'error',error:'network'}],['a']);assert.equal(f.some(x=>x.code==='capture-running'),true);assert.equal(f.some(x=>x.code==='relay-error'),true);});
+test('353 reports unselected relays and missing relay',()=>{const f=audit(captures,relays,['a']);assert.equal(f.some(x=>x.code==='unexpected-relay'&&x.cameraId==='b'),true);assert.equal(audit(captures,[],['a']).some(x=>x.code==='relay-missing'),true);});
+test('354 safe API URLs and summaries',()=>{assert.equal(validateUrl('http://localhost:3001'),'http://localhost:3001');assert.throws(()=>validateUrl('http://user:pass@localhost:3001'));assert.throws(()=>validateUrl('file:///etc/passwd'));assert.deepEqual(summarize(audit(captures,relays,['a','b'])),{errors:0,warnings:0,ok:4});});
