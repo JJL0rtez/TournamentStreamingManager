@@ -14,6 +14,7 @@ interface DeviceList {
   allDevices?: MediaDevice[];
 }
 interface DevicePreference { alias?: string; hidden?: boolean; pairedMicrophoneId?: string }
+interface NetworkStatus { local: { available: boolean; address: string }; remote: { state: "disabled" | "listening" | "unavailable" | "starting"; address: string | null; message: string } }
 interface AppSettings { version: 1; network: { mode: "offline" | "tailscale" | "lan"; bindAddress: string }; devices: Record<string, DevicePreference> }
 
 interface CaptureQuality {
@@ -27,7 +28,6 @@ interface Capture {
   cameraName: string;
   microphoneName: string;
   recordingPath: string;
-  recordingEnabled?: boolean;
   selectedMode?: { width: number; height: number; fps: number } | null;
   running: boolean;
   previewAvailable: boolean;
@@ -178,9 +178,6 @@ interface SessionAssignment {
   cameraName: string;
   microphoneName: string;
   ring: string;
-  audioSyncOffsetMs?: number;
-  overlays?: Array<{ imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number }>;
-  overlay?: { imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number };
 }
 interface TournamentSession {
   eventId?: string;
@@ -308,8 +305,9 @@ function OperationsAlertHistory({ nodeId, eventId, alerts, online }: {
     setRecords(previous => previous.map(r => r.key === key && r.firstSeen === firstSeen && !r.resolvedAt ?
       { ...r, acknowledgedAt: stamp } : r));
   }
-  return <details className="session-panel" aria-label="Operations alert history">
-    <summary>Operations alerts ({active.length} active, {unacknowledged.length} unacknowledged)</summary>
+  return <section className="session-panel" aria-label="Operations alert history">
+    <div className="section-heading"><h3>Operations alerts</h3>
+      <span className="muted">{active.length} active · {unacknowledged.length} unacknowledged</span></div>
     <p className="muted">Acknowledgement records that an operator saw the alert. It does not fix or silence the underlying issue.
       Alert history is stored in this browser, separately for each node and event.</p>
     <div className="field" style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -339,7 +337,7 @@ function OperationsAlertHistory({ nodeId, eventId, alerts, online }: {
         <td>{!r.resolvedAt && !r.acknowledgedAt ? <button type="button" onClick={() => acknowledge(r.key, r.firstSeen)}>Acknowledge</button> : ""}</td>
       </tr>)}</tbody></table></div>}
     <p className="muted">Warnings are based on detected node state. An idle camera or relay is not automatically an alert.</p>
-  </details>;
+  </section>;
 }
 
 interface IncidentEntry {
@@ -3378,7 +3376,6 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [microphones, setMicrophones] = useState<Record<string, string>>(() => savedMicrophones(node.id));
   const [labels, setLabels] = useState<Record<string, string>>(() => savedLabels(node.id));
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [recordOnStream, setRecordOnStream] = useState<Record<string, boolean>>({});
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SizeHistory>({});
@@ -3386,43 +3383,6 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [frameTick, setFrameTick] = useState(0);
   const [session, setSession] = useState<TournamentSession>({ eventName: "", assignments: [] });
   const [sessionBusy, setSessionBusy] = useState(false);
-  const [overlayLibrary, setOverlayLibrary] = useState<Array<{ imageId: string; name: string }>>([]);
-  async function refreshOverlayLibrary() {
-    const result = await requestNode("/api/overlays/images");
-    setOverlayLibrary(result.images ?? []);
-  }
-  function updateOverlays(cameraId: string, updater: (items: NonNullable<SessionAssignment["overlays"]>) => NonNullable<SessionAssignment["overlays"]>) {
-    setSession(old => ({ ...old, assignments: old.assignments.map(a => a.cameraId === cameraId
-      ? { ...a, overlays: updater(a.overlays ?? (a.overlay ? [a.overlay] : [])), overlay: undefined } : a) }));
-    setPreflight(null);
-  }
-  async function uploadOverlay(cameraId: string, slot: number, file: File) {
-    if (!(["image/png", "image/jpeg", "image/gif"].includes(file.type)) || file.size > 5 * 1024 * 1024) {
-      setError("Overlay must be PNG, JPEG or GIF, up to 5 MB."); return;
-    }
-    setError(null);
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = () => reject(new Error("Could not read overlay image"));
-        reader.readAsDataURL(file);
-      });
-      const result: { imageId: string } = await requestNode("/api/overlays/images", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base64, filename: file.name })
-      });
-      updateOverlays(cameraId, items => {
-        const next = [...items];
-        next[slot] = { imageId: result.imageId, position: next[slot]?.position ?? "top-right", offsetX: next[slot]?.offsetX ?? 20, offsetY: next[slot]?.offsetY ?? 20 };
-        return next;
-      });
-      await refreshOverlayLibrary();
-    } catch (error) { setError(String(error)); }
-  }
-  function changeOverlay(cameraId: string, slot: number, changes: Partial<NonNullable<SessionAssignment["overlays"]>[number]>) {
-    updateOverlays(cameraId, items => items.map((item, i) => i === slot ? { ...item, ...changes } : item));
-  }
-
   const [availableEvents, setAvailableEvents] = useState<Array<{ eventId: string; eventName: string; assignmentCount: number }>>([]);
   const [eventToSelect, setEventToSelect] = useState("");
   const [templates, setTemplates] = useState<Array<{ templateId: string; name: string; eventName: string; assignmentCount: number }>>([]);
@@ -3860,6 +3820,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(null);
   const [showDeviceManager, setShowDeviceManager] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [keyImportFile, setKeyImportFile] = useState<File | null>(null);
@@ -3876,11 +3837,11 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       setDevices(result);
       setMicrophones((previous) => {
         const updated: Record<string, string> = {};
+        // Never guess pairings from enumeration order: identical USB cameras can reorder.
         for (const camera of result.cameras) {
-          const sessionMic = session.assignments.find(a => a.cameraId === camera.id)?.microphoneName;
           const previousMic = previous[camera.id];
-          const matched = [sessionMic, previousMic].find(name => name && result.microphones.some(m => m.name === name));
-          updated[camera.id] = matched || "";
+          updated[camera.id] = previousMic && result.microphones.some((m) => m.name === previousMic)
+            ? previousMic : "";
         }
         return updated;
       });
@@ -3889,19 +3850,18 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
   }
 
   useEffect(() => {
-    void refreshOverlayLibrary().catch(() => {});
     void refreshDevices();
     void requestNode("/api/recording-events").then((data: { events: RecordingEvent[] }) => setRecordingEvents(data.events)).catch(() => {});
     void refreshYouTubeProfiles();
     if (node.local) void requestNode("/api/settings")
       .then((data: {settings: AppSettings}) => setSettings(data.settings))
       .catch((cause) => setError(String(cause)));
+    if (node.local) void requestNode("/api/network/status")
+      .then((data: NetworkStatus) => setNetworkStatus(data))
+      .catch(() => setNetworkStatus(null));
     void refreshEvents().catch(() => {});
     void requestNode("/api/session").then((data: { session: TournamentSession | null }) => {
-      if (data.session) {
-        setSession(data.session);
-        setMicrophones(previous => ({ ...previous, ...Object.fromEntries(data.session!.assignments.map(a => [a.cameraId, a.microphoneName])) }));
-      }
+      if (data.session) setSession(data.session);
     }).catch((cause) => setError(String(cause)));
   }, []);
   useEffect(() => {
@@ -4001,8 +3961,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         await requestNode(`/api/captures/${encodeURIComponent(camera.id)}/stop`, { method: "POST" });
       } else {
         const microphoneId = settings?.devices[camera.id]?.pairedMicrophoneId;
-        const microphoneName = (microphoneId ? devices.microphones.find(m => m.id === microphoneId)?.name : undefined)
-          || session.assignments.find(a => a.cameraId === camera.id)?.microphoneName || microphones[camera.id];
+        const microphoneName = microphoneId ? devices.microphones.find(m => m.id === microphoneId)?.name : microphones[camera.id];
         if (!microphoneName) throw new Error(`Assign a microphone to ${camera.name} first.`);
         if (captures.some((item) => item.microphoneName === microphoneName)) {
           throw new Error(`Microphone already in use: ${microphoneName}`);
@@ -4081,31 +4040,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
     await perform(cameraId, async () => {
       if (active) {
         await requestNode(`/api/youtube/${encodeURIComponent(cameraId)}/stop`, { method: "POST" });
-        const activeCapture = captures.find(c => c.cameraId === cameraId);
-        if (activeCapture && !activeCapture.recordingEnabled) {
-          await requestNode(`/api/captures/${encodeURIComponent(cameraId)}/stop`, { method: "POST" });
-          const updated = await requestNode("/api/captures");
-          setCaptures(updated.captures);
-        }
       } else {
         const streamKey = streamKeys[cameraId]?.trim();
         if (!streamKey && !savedProfiles[cameraId]) throw new Error("Enter a stream key or save a profile first.");
-        if (!captures.some(c => c.cameraId === cameraId)) {
-          
-          const camera = devices.cameras.find(c => c.id === cameraId);
-          if (!camera) throw new Error("Camera not connected.");
-          const pairedId = settings?.devices[cameraId]?.pairedMicrophoneId;
-          const microphoneName = (pairedId ? devices.microphones.find(m => m.id === pairedId)?.name : undefined)
-            || session.assignments.find(a => a.cameraId === cameraId)?.microphoneName || microphones[cameraId];
-          if (!microphoneName) throw new Error("Select a microphone before starting.");
-          if (captures.some(c => c.microphoneName === microphoneName)) throw new Error("Microphone already in use.");
-          await requestNode("/api/captures/start", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cameraId, cameraName: camera.name, cameraDeviceId: cameraId, microphoneName, microphoneId: pairedId, recordingEnabled: Boolean(recordOnStream[cameraId]) })
-          });
-          const recordingData = await requestNode("/api/captures");
-          setCaptures(recordingData.captures);
-        }
         await requestNode(`/api/youtube/${encodeURIComponent(cameraId)}/start`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4214,22 +4151,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
     devices.allDevices?.find((d) => d.id === cameraId)?.displayName || name;
   const visibleCameras = devices.cameras.filter((camera) => settings?.devices[camera.id]?.hidden !== true);
   const allDevices = devices.allDevices ?? [...devices.cameras, ...devices.microphones];
-  const [deviceSettingsDirty, setDeviceSettingsDirty] = useState(false);
-  const editDevice = (id: string, patch: DevicePreference) => {
-    setSettings(previous => previous ? ({ ...previous,
-      devices: { ...previous.devices, [id]: { ...previous.devices[id], ...patch } }
-    }) : previous);
-    setDeviceSettingsDirty(true);
-  };
-  useEffect(() => {
-    if (!deviceSettingsDirty || !settings || !node.local) return;
-    const timer = window.setTimeout(() => {
-      void requestNode("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) })
-        .then(() => setDeviceSettingsDirty(false))
-        .catch(error => setError(`Could not save device settings: ${String(error)}`));
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [settings, deviceSettingsDirty]);
+  const editDevice = (id: string, patch: DevicePreference) => setSettings((previous) => previous ? ({
+    ...previous, devices: { ...previous.devices, [id]: { ...previous.devices[id], ...patch } }
+  }) : previous);
   async function saveSettings() {
     if (!settings || !node.local) return;
     setSettingsBusy(true); setSettingsMessage("");
@@ -4347,8 +4271,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
       </header>
 
       {!node.local && <div className="readonly-notice" role="status">Remote node: read-only monitoring. Use this computer locally to control its cameras and recordings.</div>}
-      {node.local && settings && <section className="session-panel settings-panel">
-        <div className="section-heading"><h3>Device and network settings</h3>
+      {node.local && settings && <details className="session-panel settings-panel compact-collapsible">
+        <summary>Device and network settings</summary>
+        <div className="section-heading"><h3>Configuration</h3>
           <button type="button" onClick={() => setShowDeviceManager((value) => !value)}>
             {showDeviceManager ? "Close device manager" : "Manage cameras and microphones"}
           </button>
@@ -4385,6 +4310,11 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
             <input value={settings.network.bindAddress} placeholder="127.0.0.1"
               onChange={(e) => setSettings((old) => old ? ({...old, network: {...old.network, bindAddress: e.target.value}}) : old)}/></label>
         </div>
+        {networkStatus && <p role="status" style={{color: networkStatus.remote.state === "unavailable" ? "#d97706" : undefined}}>
+          <strong>Remote access: {networkStatus.remote.state === "listening" ? "Listening" : networkStatus.remote.state === "unavailable" ? "Unavailable" : networkStatus.remote.state === "starting" ? "Starting" : "Disabled"}.</strong>{" "}
+          {networkStatus.remote.message} Local dashboard remains available at {networkStatus.local.address}.
+          {networkStatus.remote.state === "unavailable" && " Change the network settings above and save, then restart the backend."}
+        </p>}
         <p className="muted">Offline mode does not start remote-node connections. YouTube streaming is separately controlled. Tailscale/LAN mode requires the exact IP of the intended network interface.</p>
         <div className="camera-actions"><button type="button" className="primary-button" disabled={settingsBusy} onClick={() => void saveSettings()}>Save settings</button>
           <button type="button" onClick={() => void downloadBackup()}>Download configuration backup</button></div>
@@ -4392,8 +4322,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           <input type="file" accept=".json,application/json" onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}/></label>
           <button type="button" disabled={!restoreFile || settingsBusy || activeRecordings.length > 0} onClick={() => void restoreBackup()}>Restore backup</button></div>
         {settingsMessage && <p role="status">{settingsMessage}</p>}
-      </section>}
-      {node.local && <section className="session-panel">
+      </details>}
+      {node.local && <details className="session-panel compact-collapsible">
+        <summary>Bulk YouTube key setup</summary>
         <div className="section-heading"><h3>Bulk YouTube key setup</h3></div>
         <p className="muted">Download a template containing detected camera IDs, fill in the streamKey fields on a trusted computer, then import the JSON. Keys are encrypted by the backend and are not included in ordinary configuration backups.</p>
         <div className="camera-actions">
@@ -4406,7 +4337,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </button>
         </div>
         {keyImportMessage && <p role="status">{keyImportMessage}</p>}
-      </section>}
+      </details>}
       <section className="session-panel">
         <div className="section-heading"><h3>Tournament session</h3>
           <span className="muted">Saved persistently on this node</span>
@@ -4480,84 +4411,19 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           {visibleCameras.map((camera) => {
             const assignment = session.assignments.find((item) => item.cameraId === camera.id);
             const pairedId = settings?.devices[camera.id]?.pairedMicrophoneId;
-            const assignedMic = (pairedId ? allDevices.find(d => d.id === pairedId)?.name : undefined)
-              || session.assignments.find(a => a.cameraId === camera.id)?.microphoneName || microphones[camera.id] || "";
+            const assignedMic = pairedId ? (allDevices.find((d) => d.id === pairedId)?.name ?? "") : (microphones[camera.id] ?? "");
             return <label className="field" key={camera.id}>
               <span>{labelFor(camera.id, camera.name)} ring assignment</span>
               <input value={assignment?.ring ?? ""} placeholder="e.g. Ring 1"
                 disabled={!node.local || sessionBusy || activeRecordings.length > 0}
-                onBlur={() => { if (session.eventName.trim()) void saveSession(); }}
                 onChange={(event) => setSession((old) => {
                   const rest = old.assignments.filter((item) => item.cameraId !== camera.id);
                   const ring = event.target.value;
                   return { ...old, assignments: ring ? [...rest, {
                     cameraId: camera.id, cameraName: camera.name,
-                    microphoneName: assignedMic, ring,
-                    audioSyncOffsetMs: old.assignments.find(item => item.cameraId === camera.id)?.audioSyncOffsetMs ?? -300,
-                    overlays: old.assignments.find(item => item.cameraId === camera.id)?.overlays ?? (old.assignments.find(item => item.cameraId === camera.id)?.overlay ? [old.assignments.find(item => item.cameraId === camera.id)!.overlay!] : [])
+                    microphoneName: assignedMic, ring
                   }] : rest };
                 })} />
-              {assignment && <span className="field">
-                <span>Audio sync offset (ms)</span>
-                <input type="number" min={-2000} max={2000} step={10}
-                  aria-label={`Audio sync offset for ${assignment.ring}`}
-                  value={assignment.audioSyncOffsetMs ?? -300}
-                  disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                  onChange={(event) => {
-                    const value = event.target.valueAsNumber;
-                    if (!Number.isInteger(value) || value < -2000 || value > 2000) return;
-                    setSession(old => ({ ...old, assignments: old.assignments.map(item =>
-                      item.cameraId === camera.id ? { ...item, audioSyncOffsetMs: value } : item) }));
-                    setPreflight(null);
-                  }} />
-                <small>Negative values advance audio; positive values delay it. Save Session to apply on the next recording.</small>
-              </span>}
-              {assignment && <div className="field" style={{ display: "grid", gap: 8 }}>
-                <strong>Image overlays (up to 4)</strong>
-                
-                <small>Choose an image already stored in config/overlays, or upload a new PNG, JPEG or animated GIF. Browsers control the upload file picker's initial folder, so selecting from the saved library is the default.</small>
-                {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).map((overlay, slot) => <div key={`${camera.id}-overlay-${slot}`} className="bulk-results" style={{ display: "grid", gap: 6 }}>
-                  <strong>Overlay {slot + 1}</strong>
-                  <img src={`/api/overlays/images/${encodeURIComponent(overlay.imageId)}`} alt={`Overlay ${slot + 1} preview`} style={{ maxWidth: 200, maxHeight: 100, objectFit: "contain" }} />
-                  <div className="overlay-image-row">
-                    <label className="overlay-upload">Upload <input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
-                      disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                      onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, slot, file); e.target.value = ""; }} /></label>
-                    <label className="overlay-image-select">Saved image <select value={overlay.imageId} disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                      onFocus={() => { if (!overlayLibrary.length) void refreshOverlayLibrary().catch(error => setError(String(error))); }}
-                      onChange={e => changeOverlay(camera.id, slot, { imageId: e.target.value })}>
-                      {!overlayLibrary.some(img => img.imageId === overlay.imageId) && <option value={overlay.imageId}>Saved image (loading or unavailable)</option>}
-                      {overlayLibrary.map(img => <option key={img.imageId} value={img.imageId}>{img.name}</option>)}
-                    </select></label>
-                  </div>
-                  <div className="overlay-placement-row">
-                    <label>Position <select value={overlay.position} disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                      onChange={e => changeOverlay(camera.id, slot, { position: e.target.value as typeof overlay.position })}>
-                      <option value="top-left">Top left</option><option value="top-right">Top right</option>
-                      <option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option>
-                    </select></label>
-                    <label>X offset <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetX}
-                      disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                      onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetX: e.target.valueAsNumber }); }} /></label>
-                    <label>Y offset <input type="number" min={-4096} max={4096} step={1} value={overlay.offsetY}
-                      disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                      onChange={e => { if (Number.isInteger(e.target.valueAsNumber) && Math.abs(e.target.valueAsNumber) <= 4096) changeOverlay(camera.id, slot, { offsetY: e.target.valueAsNumber }); }} /></label>
-                  </div>
-                  <button type="button" disabled={sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onClick={() => updateOverlays(camera.id, items => items.filter((_, i) => i !== slot))}>Remove overlay {slot + 1}</button>
-                </div>)}
-                {(assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length < 4 && <div>
-                  <br/>
-                  <button type="button" disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onClick={() => { const first = overlayLibrary[0]?.imageId; if (!first) { void refreshOverlayLibrary().catch(error => setError(String(error))); setError("Upload an image or refresh the saved library first."); return; }
-                      updateOverlays(camera.id, items => [...items, { imageId: first, position: "top-right", offsetX: 20, offsetY: 20 }]); }}>Add overlay from library</button>
-                  <label>Or add new image <br/><br/><input type="file" accept=".png,.jpg,.jpeg,.gif,image/png,image/jpeg,image/gif"
-                    disabled={!node.local || sessionBusy || activeRecordings.length > 0 || youtubeStreams.length > 0}
-                    onChange={e => { const file = e.target.files?.[0]; if (file) void uploadOverlay(camera.id, (assignment.overlays ?? (assignment.overlay ? [assignment.overlay] : [])).length, file); e.target.value = ""; }} /></label>
-                </div>}
-                <small>Save Session and restart capture to apply. Animated GIFs loop continuously. Four animated overlays per camera may increase CPU/GPU load.</small>
-              </div>}
-
             </label>;
           })}
         </div>
@@ -4596,16 +4462,30 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         </div>}
       </section>
 
-      <section className="overview compact-tools" aria-label="System monitoring and tournament readiness">
-        <h2>System monitoring and tournament readiness</h2>
-        <p>Expand only the tool you need.</p>
-        <details><summary>System Resource Snapshot</summary>
-          {node.local && <SystemResourceMonitor requestNode={requestNode} />}
+      <details className="tool-group compact-collapsible"><summary>System and USB Diagnostics</summary>
+        <details className="tool-item compact-collapsible"><summary>System Resource Monitor and USB Diagnostics</summary>
+      {node.local && <SystemResourceMonitor requestNode={requestNode} />}
+      {node.local && <>
+        <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
+        <CameraAssetInventory nodeId={node.id} />
+        <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />
+      </>}
+
         </details>
-        <details><summary>Capture and Streaming Quality</summary>
-          <CaptureQualityPanel />
+
+      </details>
+      <details className="tool-group compact-collapsible"><summary>Streaming Health</summary>
+        <details className="tool-item compact-collapsible"><summary>Capture Signal Health</summary>
+      {node.local && <CaptureSignalHealthPanel requestNode={requestNode} nodeId={node.id} />}
+
         </details>
-        <details><summary>Tournament Readiness</summary>
+        <details className="tool-item compact-collapsible"><summary>Capture Recovery and Restart Safeguards</summary>
+      {node.local && <CaptureRecoveryPanel requestNode={requestNode} />}
+        </details>
+        <details className="tool-item compact-collapsible"><summary>Capture and Streaming Quality</summary>
+      <CaptureQualityPanel />
+        </details>
+        <details className="tool-item compact-collapsible"><summary>Tournament Readiness</summary>
       <section aria-label="Tournament readiness" className="overview">
         <h2>Tournament Readiness</h2>
         <p>Snapshot of unsaved assignments, connected devices, recording disk, recording health, and YouTube relay status.</p>
@@ -4638,18 +4518,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </div>
         )}
       </section>
-        </details>
-      </section>
 
-      <section className="overview compact-tools" aria-label="Testing and diagnostics"><h2>Testing and diagnostics</h2><p>Expand only the tool you need.</p>
-      <details><summary>USB topology, inventory and bandwidth tests</summary>
-      {node.local && <>
-        <UsbTopologyDiagnostics requestNode={requestNode} nodeId={node.id} />
-        <CameraAssetInventory nodeId={node.id} />
-        <UsbBandwidthPlanner requestNode={requestNode} stressResults={stressResults} stressBusy={stressBusy} />
-      </>}
-      </details>
-      <details><summary>Pre-tournament sign-off and hardware report</summary>
       <RingPreTournamentSignoff nodeId={node.id} eventId={session.eventId || null}
         eventName={session.eventName} assignments={session.assignments} />
       <TournamentHardwareReport requestNode={requestNode} nodeId={node.id}
@@ -4659,8 +4528,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         latestStress={savedStressReports.length ? savedStressReports[savedStressReports.length - 1] : null}
         equipmentTests={equipmentTests} />
 
-      </details>
-      <details><summary>FFmpeg encoder diagnostics</summary>
+
+        </details>
+        <details className="tool-item compact-collapsible"><summary>FFmpeg Encoder Diagnostics</summary>
       <section aria-label="FFmpeg encoder diagnostics" className="overview">
         <h2>FFmpeg Encoder Diagnostics</h2>
         <p>FFmpeg's reported encoding FPS, processing speed, dropped-frame count and bitrate for each running capture process.
@@ -4685,8 +4555,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         </div>}
       </section>
 
-      </details>
-      <details><summary>Multi-camera recording stress test</summary>
+
+        </details>
+        <details className="tool-item compact-collapsible"><summary>Multi-Camera Recording Stress Test</summary>
       <section aria-label="Multi-camera recording stress test" className="overview">
         <h2>Multi-Camera Recording Stress Test</h2>
         <p>Start local recordings on at least two cameras, then monitor all active recordings together for 30 seconds.
@@ -4778,8 +4649,9 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         </div>
       </section>
 
-      </details>
-      <details><summary>Camera and microphone test mode</summary>
+
+        </details>
+        <details className="tool-item compact-collapsible"><summary>Camera and Microphone Test Mode</summary>
       <section aria-label="Camera and microphone test mode" className="overview">
         <h2>Camera and Microphone Test Mode</h2>
         <p>Start a camera preview to verify live video. Speak into the microphone during the three-second audio test.
@@ -4805,26 +4677,12 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         })}
       </section>
 
+
+        </details>
+
       </details>
-      <details><summary>Advanced testing and troubleshooting</summary>
-      <RecordingConfigurationReliabilityPanel requestNode={requestNode} />
-      <CameraConfigurationReliabilityPanel requestNode={requestNode} />
-      <ReliabilityWarningsPanel requestNode={requestNode} />
-      <CameraHealthPanel requestNode={requestNode} />
-      <CameraHealthHistoryPanel requestNode={requestNode} />
-      <CameraDisconnectionAnalysis requestNode={requestNode} />
-      <UsbReliabilityWarningsPanel requestNode={requestNode} />
-      <UsbRecordingCorrelationPanel requestNode={requestNode} />
-      <CameraTroubleshootingPanel requestNode={requestNode} />
-      <GuidedTroubleshootingTests />
-      <FailureInvestigationPanel requestNode={requestNode} />
-      <CameraReliabilityDashboard requestNode={requestNode} />
-      </details>
-      </section>
-      <section className="overview compact-tools" aria-label="Recording reports and tournament-day operations">
-        <h2>Recording reports and tournament-day operations</h2>
-        <p>Expand only the tool you need.</p>
-        <details><summary>Tournament recording summary</summary>
+      <details className="tool-group compact-collapsible"><summary>Recording and Tournament Operations</summary>
+        <details className="tool-item compact-collapsible"><summary>Tournament Recording Summary</summary>
       <section aria-label="Tournament recording summary" className="overview">
         <div>
           <strong>Tournament recording summary</strong>{" "}
@@ -4865,9 +4723,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </>}
         </div>
       </section>
-        </details>
-        <details><summary>Recording history and segment checks</summary>
 
+
+        </details>
+        <details className="tool-item compact-collapsible"><summary>Recording Session History</summary>
       <section aria-label="Recording session history" className="overview">
         <div>
           <strong>Recording history and segment checks</strong>{" "}
@@ -4905,9 +4764,10 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           </details>)}
         </div>
       </section>
-        </details>
-        <details><summary>Tournament-day operations</summary>
 
+
+        </details>
+        <details className="tool-item compact-collapsible"><summary>Tournament-day Operations and Alerts</summary>
       <section className="session-panel" aria-label="Tournament day operations">
         <div className="section-heading"><h3>Tournament-day operations</h3>
           <span className="muted">Live node status · updates every 2 seconds</span></div>
@@ -4949,23 +4809,17 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         <p className="muted">Status reflects this node only. Remote nodes appear in their own read-only dashboard.
           A YouTube relay marked live indicates local relay progress, not independently verified public playback.</p>
       </section>
-        </details>
-      </section>
 
-      <section className="overview compact-tools" aria-label="Operations alerts and reports">
-        <h2>Operations alerts and reports</h2>
-        <p>Expand only the tool you need.</p>
-      <details aria-label="Operations alert thresholds">
-        <summary>Operations alert thresholds</summary>
+      <section className="session-panel" aria-label="Operations alert thresholds">
         <label>Warn when an active YouTube relay reports no progress for
           <select value={relayStaleSeconds} onChange={e => setRelayStaleSeconds(Number(e.target.value))}>
             {[15, 30, 60, 120].map(seconds => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
           </select>
         </label>
         <p className="muted">This threshold applies only to relays reported as live, and measures reported local relay progress, not public YouTube playback.</p>
-      </details>
-      <details aria-label="USB reliability alert integration">
-        <summary>USB connection alerts</summary>
+      </section>
+      <section className="session-panel" aria-label="USB reliability alert integration">
+        <h3>USB connection alerts</h3>
         <p className="muted">Connection warnings from the capture node are included in Operations alerts
           and the automatic critical incident workflow. Acknowledging an alert does not repair a camera.
           Counts are based on sampled history, not proof of a USB controller fault.</p>
@@ -4974,70 +4828,106 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
         {usbWarningsError && <p className="camera-warning" role="status">
           USB reliability data may be stale: {usbWarningsError}
         </p>}
-      </details>
-      <details aria-label="Alert history and acknowledgements"><summary>Alert history and acknowledgements</summary>
+      </section>
       <OperationsAlertHistory nodeId={node.id} eventId={session.eventId || ""}
         alerts={operationsAlerts} online={connected && usbWarningsReady && !usbWarningsError} />
+
+        </details>
+
       </details>
-      <details aria-label="Incident log"><summary>Incident log</summary>
+      <details className="tool-group compact-collapsible"><summary>Incident Reports and Analytics</summary>
+      <details className="tool-item compact-collapsible"><summary>Incident Log</summary>
       <IncidentLog key={`${node.id}:${session.eventId || "unsaved"}`} nodeId={node.id}
         eventId={session.eventId || ""} alerts={operationsAlerts}
         online={connected && usbWarningsReady && !usbWarningsError} />
       </details>
-      <details aria-label="Incident trends"><summary>Incident trends</summary>
+      <details className="tool-item compact-collapsible"><summary>Incident Trends</summary>
       <IncidentTrends key={`trends:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
       </details>
-      <details aria-label="Tournament comparisons"><summary>Tournament comparisons</summary>
+      <details className="tool-item compact-collapsible"><summary>Tournament To Tournament Comparison</summary>
       <TournamentToTournamentComparison />
       </details>
-      <details aria-label="Reliability trends"><summary>Reliability trends</summary>
+      <details className="tool-item compact-collapsible"><summary>Tournament Reliability Trends</summary>
       <TournamentReliabilityTrends />
       </details>
-      <details aria-label="Post-tournament technical report"><summary>Post-tournament technical report</summary>
+      <details className="tool-item compact-collapsible"><summary>Post Tournament Technical Report</summary>
       <PostTournamentTechnicalReport key={`post-report:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} eventName={session.eventName || ""}
         requestNode={requestNode} />
       </details>
-      <details aria-label="Incident heatmap"><summary>Incident heatmap</summary>
+      <details className="tool-item compact-collapsible"><summary>Incident Heatmap</summary>
       <IncidentHeatmap key={`heatmap:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
       </details>
-      <details aria-label="Incident analytics"><summary>Incident analytics</summary>
+      <details className="tool-item compact-collapsible"><summary>Incident Analytics</summary>
       <IncidentAnalytics key={`analytics:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
       </details>
-      <details aria-label="Incident timeline"><summary>Incident timeline</summary>
+      <details className="tool-item compact-collapsible"><summary>Incident Timeline</summary>
       <IncidentTimeline key={`timeline:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} />
       </details>
-      <details aria-label="Technical summary"><summary>Technical summary</summary>
+      <details className="tool-item compact-collapsible"><summary>Tournament Technical Summary</summary>
       <TournamentTechnicalSummary key={`summary:${node.id}:${session.eventId || "unsaved"}`}
         nodeId={node.id} eventId={session.eventId || ""} eventName={session.eventName || ""}
         requestNode={requestNode} />
       </details>
-      <details aria-label="Report archive"><summary>Report archive</summary>
+      <details className="tool-item compact-collapsible"><summary>Tournament Report Archive</summary>
       <TournamentReportArchive />
       </details>
 
-      </section>
-
-      <section className="overview compact-tools" aria-label="Operator checklists and readiness">
-        <h2>Operator checklists and readiness</h2>
-        <p>Expand only the tool you need.</p>
-        <details><summary>Readiness overview</summary>
+      </details>
+      <details className="tool-group compact-collapsible"><summary>Camera Reliability and Troubleshooting</summary>
+      <details className="tool-item compact-collapsible"><summary>Recording Configuration Reliability Panel</summary>
+      <RecordingConfigurationReliabilityPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Camera Configuration Reliability Panel</summary>
+      <CameraConfigurationReliabilityPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Reliability Warnings Panel</summary>
+      <ReliabilityWarningsPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Camera Health Panel</summary>
+      <CameraHealthPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Camera Health History Panel</summary>
+      <CameraHealthHistoryPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Camera Disconnection Analysis</summary>
+      <CameraDisconnectionAnalysis requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>USB Reliability Warnings Panel</summary>
+      <UsbReliabilityWarningsPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>USB Recording Correlation Panel</summary>
+      <UsbRecordingCorrelationPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Camera Troubleshooting Panel</summary>
+      <CameraTroubleshootingPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Guided Troubleshooting Tests</summary>
+      <GuidedTroubleshootingTests />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Failure Investigation Panel</summary>
+      <FailureInvestigationPanel requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Camera Reliability Dashboard</summary>
+      <CameraReliabilityDashboard requestNode={requestNode} />
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Tournament Readiness Overview</summary>
       <TournamentReadinessOverview requestNode={requestNode} readiness={readiness}
         readinessCurrent={readinessDraft === JSON.stringify(session)} captures={captures}
         streamCount={youtubeStreams.length} nodeId={node.id} eventId={session.eventId || "unsaved"}
         assignments={session.assignments} />
-        </details>
-        <details><summary>Guided tournament launch and shutdown</summary>
+      </details>
+      <details className="tool-item compact-collapsible"><summary>Tournament Launch Shutdown Guide</summary>
       <TournamentLaunchShutdownGuide nodeId={node.id} eventId={session.eventId || "unsaved"}
         assignments={session.assignments} captures={captures} streams={youtubeStreams} requestNode={requestNode} />
+      </details>
 
-        </details>
-      </section>
 
+      </details>
       <section className="overview" aria-label="Recording overview">
         <div className="metric"><span>Discovered cameras</span><strong>{visibleCameras.length}</strong></div>
         <div className="metric"><span>Active previews</span><strong>{previews.length}</strong></div>
@@ -5104,8 +4994,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
           const busy = busyIds.includes(camera.id);
           const expanded = expandedId === camera.id;
           const pairedId = settings?.devices[camera.id]?.pairedMicrophoneId;
-            const assignedMic = (pairedId ? allDevices.find(d => d.id === pairedId)?.name : undefined)
-              || session.assignments.find(a => a.cameraId === camera.id)?.microphoneName || microphones[camera.id] || "";
+            const assignedMic = pairedId ? (allDevices.find((d) => d.id === pairedId)?.name ?? "") : (microphones[camera.id] ?? "");
           const micBusy = Boolean(assignedMic) && captures.some((item) =>
             item.cameraId !== camera.id && item.microphoneName === assignedMic);
           const frameAvailable = preview ? preview.previewAvailable : capture?.previewAvailable;
@@ -5115,7 +5004,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
             : `${base}/api/captures/${encodeURIComponent(camera.id)}/frame?t=${frameTick}`;
           const sizeStalled = Boolean(capture && history[camera.id] &&
             now - history[camera.id].lastGrowthAt > 10000);
-          const status = capture ? (!capture.recordingEnabled ? "Streaming capture" : frozen ? "Preview frozen" : sizeStalled ? "Recording stalled" : "Recording")
+          const status = capture ? (frozen ? "Preview frozen" : sizeStalled ? "Recording stalled" : "Recording")
             : preview ? (preview.status === "error" ? "Preview error" :
               frozen ? "Preview frozen" : preview.status === "starting" ? "Starting preview" : "Previewing")
             : "Idle";
@@ -5137,25 +5026,6 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                     {preview || capture ? "Waiting for video..." : "Preview inactive"}
                   </div>
                 )}
-                {!capture && frameAvailable && session.assignments.find(a => a.cameraId === camera.id)?.overlays?.map((overlay, index) => (
-                  <img key={`${overlay.imageId}-${index}`} className={`camera-preview-overlay ${overlay.position}`}
-                    src={`${base}/api/overlays/images/${encodeURIComponent(overlay.imageId)}`}
-                    alt="" aria-hidden="true"
-                    onLoad={e => {
-                      // FFmpeg positions the original image in input-video pixels. Match that
-                      // geometry in the standalone preview rather than arbitrarily capping
-                      // the image at 40% of the preview and multiplying offsets by 0.2.
-                      const img = e.currentTarget;
-                      const videoWidth = 1920;
-                      img.style.width = `${img.naturalWidth / videoWidth * 100}%`;
-                    }}
-                    style={{
-                      left: overlay.position.endsWith("left") ? `${overlay.offsetX / 1920 * 100}%` : undefined,
-                      right: overlay.position.endsWith("right") ? `${overlay.offsetX / 1920 * 100}%` : undefined,
-                      top: overlay.position.startsWith("top") ? `${overlay.offsetY / 1080 * 100}%` : undefined,
-                      bottom: overlay.position.startsWith("bottom") ? `${overlay.offsetY / 1080 * 100}%` : undefined
-                    }} />
-                ))}
               </div>
 
               {(frozen || sizeStalled || preview?.status === "error") && (
@@ -5169,22 +5039,27 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               <div className="camera-actions camera-primary-actions">
                 <button type="button" disabled={!node.local || !connected || busy}
                   onClick={() => void togglePreview(camera, isPreviewing)}>
-                  {busy ? "Wait..." : isPreviewing ? "Stop Preview" : "Preview"}
+                  {busy ? "Working..." : isPreviewing ? "Stop Preview" : "Start Preview"}
                 </button>
                 <button type="button" className={capture ? "danger-button" : "primary-button"}
-                  disabled={!node.local || !connected || busy || (Boolean(capture) && !capture.recordingEnabled) || (!capture && (!assignedMic || micBusy))}
+                  disabled={!node.local || !connected || busy || (!capture && (!assignedMic || micBusy))}
                   onClick={() => void toggleRecording(camera, capture)}>
-                  {busy ? "Wait..." : capture && !capture.recordingEnabled ? "Stream Only" : capture ? "Stop Record" : "Record"}
+                  {busy ? "Working..." : capture ? "Stop Recording" : "Record"}
+                </button>
+                <button type="button" onClick={() => setExpandedId(expanded ? null : camera.id)}>
+                  {expanded ? "Collapse" : "Identify"}
                 </button>
                 <button type="button" disabled={!node.local || busy || !connected ||
-                  (!youtube && (!streamKeys[camera.id]?.trim() && !savedProfiles[camera.id]))}
+                  (!youtube && (!capture || (!streamKeys[camera.id]?.trim() && !savedProfiles[camera.id])))}
                   onClick={() => void toggleYouTube(camera.id, Boolean(youtube))}>
                   {youtube ? "Stop Stream" : "Start Stream"}
                 </button>
-                <button type="button" onClick={() => setExpandedId(expanded ? null : camera.id)}>
-                  {expanded ? "Collapse" : "Expand"}
-                </button>
               </div>
+
+              <details className="camera-settings-details compact-collapsible">
+                <summary>Camera settings and stream key</summary>
+                {capture?.running && <button type="button" disabled={!node.local || !connected || busy}
+                  onClick={() => void recoverRecording(camera)}>Restart Recording (5 min cooldown, max 2/hour)</button>}
 
               <div className="youtube-controls">
                 <div className="youtube-heading">
@@ -5194,15 +5069,6 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                       ? "No recent output" : youtube.status) : "Offline"}
                   </span>
                 </div>
-                {youtube?.error && <div className="camera-warning">{youtube.error}</div>}
-              </div>
-              <details className="camera-settings-details"><summary>Camera settings</summary>
-                {capture?.running && capture.recordingEnabled !== false && <button type="button" disabled={!node.local || !connected || busy}
-                  onClick={() => void recoverRecording(camera)}>Restart Recording (5 min cooldown, max 2/hour)</button>}
-                <label className="stream-record-check"><input type="checkbox" checked={Boolean(recordOnStream[camera.id])}
-                  onChange={e => setRecordOnStream(old => ({ ...old, [camera.id]: e.target.checked }))} /> Record when streaming</label>
-                <small className="muted">When unchecked, Start Stream captures video and audio without saving a local recording. This choice takes effect when a new stream starts.</small>
-
                 {!youtube && (
                   <label className="field">
                     <span>Stream key (leave blank to use saved profile)</span>
@@ -5224,10 +5090,14 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
                   </label>
                 )}
                 {!youtube && <div className="camera-actions">
-                  {savedProfiles[camera.id] && <span className="muted">Using saved key</span>}
+                  {savedProfiles[camera.id] && <span className="muted">Saved: {savedProfiles[camera.id]}</span>}
                   <button type="button" disabled={!node.local || !streamKeys[camera.id]?.trim()} onClick={() => void saveYouTubeKey(camera)}>Save key</button>
                   {savedProfiles[camera.id] && <button type="button" disabled={!node.local} onClick={() => void deleteYouTubeKey(camera.id)}>Forget key</button>}
                 </div>}
+                {!capture && !youtube && <small className="muted">Start recording before streaming.</small>}
+                {youtube?.error && <div className="camera-warning">{youtube.error}</div>}
+              </div>
+
               <label className="field">
                 <span>Camera label</span>
                 <input value={settings?.devices[camera.id]?.alias ?? labels[camera.id] ?? ""} placeholder="e.g. Ring 1"
@@ -5235,7 +5105,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               </label>
               <label className="field">
                 <span>Microphone</span>
-                <select value={pairedId || devices.microphones.find(m => m.name === assignedMic)?.id || ""} disabled={!node.local || Boolean(capture)}
+                <select value={pairedId ?? ""} disabled={!node.local || Boolean(capture)}
                   onChange={(event) => {
                     const microphoneId = event.target.value;
                     const microphoneName = devices.microphones.find(m => m.id === microphoneId)?.name ?? "";
@@ -5252,7 +5122,7 @@ function NodeDashboard({ node }: { node: NodeInfo }) {
               {micBusy && <span className="camera-warning">Microphone in use by another recording</span>}
 
               </details>
-              {capture && capture.recordingEnabled !== false && (
+              {capture && (
                 <div className="recording-details">
                   <div><span>Duration</span><strong>{duration(capture.startedAt, now)}</strong></div>
                   <div><span>File size</span><strong>{fileSize(capture.recordingFileSize)}</strong></div>
@@ -5296,6 +5166,1817 @@ interface CameraCapabilityResult {
   selectedMode: { width: number; height: number; fps: number } | null;
   modes: Array<{ width: number; height: number; fps: number; pixelFormat: string }>;
   error?: string;
+}
+
+
+// Local capture signal diagnostics and session-only warning history.
+// Alerts are generated from changes in observed health, not from the initial snapshot.
+interface CaptureSignalSnapshot {
+  checkedAt: string;
+  scope: string;
+  captures: Array<{
+    cameraId: string;
+    cameraName: string;
+    video: { status: string; frameAgeMs?: number | null; possibleFreezeMs?: number | null;
+      identicalFrameMs?: number | null; lastVisualMotionAt?: number | null };
+    audio: { status: string; rmsDb?: number | null; audioSampleAgeMs?: number | null;
+      audioSamplesObserved?: number; silenceDurationMs?: number | null };
+  }>;
+}
+
+type SignalAlertKind = "video" | "audio" | "connection";
+type SignalAlertLevel = "warning" | "recovered";
+interface SignalAlert {
+  id: number;
+  at: number;
+  cameraName: string;
+  kind: SignalAlertKind;
+  level: SignalAlertLevel;
+  message: string;
+  acknowledged?: boolean;
+  severity?: "warning" | "critical";
+}
+
+function videoSignalState(item: CaptureSignalSnapshot["captures"][number]): string {
+  if (typeof item.video.possibleFreezeMs === "number" && item.video.possibleFreezeMs > 0) return "possible-freeze";
+  return item.video.status;
+}
+function isVideoWarning(state: string): boolean {
+  return state !== "receiving" && state !== "waiting";
+}
+function isAudioWarning(state: string): boolean {
+  return state === "no-audio-samples" || state === "audio-samples-stalled";
+}
+// Per-node, browser-local rules. Thresholds control dashboard alerting, not FFmpeg capture.
+interface SignalAlertRules {
+  enabled: boolean;
+  freezeWarningSeconds: number;
+  staleFrameSeconds: number;
+  missingAudioSeconds: number;
+  consecutiveChecks: number;
+  cooldownSeconds: number;
+  alertOnSilence: boolean;
+}
+const DEFAULT_SIGNAL_RULES: SignalAlertRules = {
+  enabled: true, freezeWarningSeconds: 12, staleFrameSeconds: 5,
+  missingAudioSeconds: 10, consecutiveChecks: 2, cooldownSeconds: 60,
+  alertOnSilence: false
+};
+function loadSignalRules(nodeId: string): SignalAlertRules {
+  try {
+    const value = JSON.parse(localStorage.getItem(`tournament-signal-rules:v1:${nodeId}`) || "null");
+    if (!value || typeof value !== "object") return { ...DEFAULT_SIGNAL_RULES };
+    const rules = { ...DEFAULT_SIGNAL_RULES };
+    for (const key of ["freezeWarningSeconds", "staleFrameSeconds", "missingAudioSeconds", "consecutiveChecks", "cooldownSeconds"] as const) {
+      if (typeof value[key] === "number" && Number.isFinite(value[key])) rules[key] = Math.max(1, Math.min(key === "consecutiveChecks" ? 20 : 3600, value[key]));
+    }
+    if (typeof value.enabled === "boolean") rules.enabled = value.enabled;
+    if (typeof value.alertOnSilence === "boolean") rules.alertOnSilence = value.alertOnSilence;
+    return rules;
+  } catch { return { ...DEFAULT_SIGNAL_RULES }; }
+}
+function classifiedSignal(item: CaptureSignalSnapshot["captures"][number], rules: SignalAlertRules): { video: string; audio: string } {
+  const freeze = item.video.possibleFreezeMs;
+  const age = item.video.frameAgeMs;
+  const video = typeof age === "number" && age >= rules.staleFrameSeconds * 1000 ? "stalled" :
+    typeof freeze === "number" && freeze >= rules.freezeWarningSeconds * 1000 ? "possible-freeze" : item.video.status;
+  const sampleAge = item.audio.audioSampleAgeMs;
+  const audio = item.audio.status === "audio-samples-stalled" && typeof sampleAge === "number" && sampleAge < rules.missingAudioSeconds * 1000 ? "audio-active" :
+    item.audio.status === "no-audio-samples" && typeof sampleAge === "number" && sampleAge < rules.missingAudioSeconds * 1000 ? "unverified" : item.audio.status;
+  return { video, audio };
+}
+type CameraSignalOverride = { enabled: boolean; freezeWarningSeconds: number | null; staleFrameSeconds: number | null; missingAudioSeconds: number | null; alertOnSilence: boolean | null };
+const DEFAULT_CAMERA_OVERRIDE: CameraSignalOverride = { enabled: true, freezeWarningSeconds: null, staleFrameSeconds: null, missingAudioSeconds: null, alertOnSilence: null };
+function loadCameraSignalOverrides(nodeId: string): Record<string, CameraSignalOverride> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(`tournament-camera-signal-rules:v1:${nodeId}`) || "{}");
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
+    const result: Record<string, CameraSignalOverride> = {};
+    for (const [id, value] of Object.entries(stored)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const candidate = value as Partial<CameraSignalOverride>;
+      const numberOrNull = (n: unknown) => typeof n === "number" && Number.isFinite(n) ? Math.max(1, Math.min(3600, Math.floor(n))) : null;
+      result[id] = { enabled: candidate.enabled !== false,
+        freezeWarningSeconds: numberOrNull(candidate.freezeWarningSeconds),
+        staleFrameSeconds: numberOrNull(candidate.staleFrameSeconds),
+        missingAudioSeconds: numberOrNull(candidate.missingAudioSeconds),
+        alertOnSilence: typeof candidate.alertOnSilence === "boolean" ? candidate.alertOnSilence : null };
+    }
+    return result;
+  } catch { return {}; }
+}
+function cameraRules(base: SignalAlertRules, override?: CameraSignalOverride): SignalAlertRules {
+  if (!override) return base;
+  return { ...base, enabled: base.enabled && override.enabled,
+    freezeWarningSeconds: override.freezeWarningSeconds ?? base.freezeWarningSeconds,
+    staleFrameSeconds: override.staleFrameSeconds ?? base.staleFrameSeconds,
+    missingAudioSeconds: override.missingAudioSeconds ?? base.missingAudioSeconds,
+    alertOnSilence: override.alertOnSilence ?? base.alertOnSilence };
+}
+function signalSeverity(kind: SignalAlertKind, state: string): "warning" | "critical" {
+  return kind === "connection" || state === "stalled" || state === "no-audio-samples" || state === "audio-samples-stalled" ? "critical" : "warning";
+}
+
+interface RecoveryPolicy { enabled: boolean; unhealthyChecks: number; minimumCaptureAgeSeconds: number; protectedStreams: true; }
+interface RecoveryCameraStatus {
+  cameraId: string; allowed: boolean; reason?: string;
+  attemptsInLastHour: number; cooldownRemainingMs: number;
+  streaming: boolean; restarting: boolean; recordingEnabled: boolean; lastResult: string | null;
+}
+interface RecoveryStatus {
+  automaticEnabled: boolean; cooldownMinutes: number; maxAttemptsPerHour: number;
+  cameras: RecoveryCameraStatus[];
+}
+interface RecoveryEscalation { cameraId: string; severity: "critical"; failuresInWindow: number; firstFailureAt: string; lastFailureAt: string; unacknowledgedFailures: number; latestDetail: string; incidentStatus: "open" | "resolved"; resolvedAt: string | null; resolutionNote: string | null }
+interface RecoveryEscalationResponse { windowMinutes: number; threshold: number; escalations: RecoveryEscalation[] }
+interface RecoveryAuditEntry { type: "failure" | "success" | "acknowledged" | "resolved" | "reopened"; cameraId: string; at: string; detail: string }
+interface RecoveryEvent { cameraId: string; at: string; outcome: "success" | "failure"; detail: string; acknowledgedAt?: string | null }
+const recoveryEventKey = (event: RecoveryEvent) => `${event.at}|${event.cameraId}|${event.outcome}`;
+
+function CaptureRecoveryPanel({ requestNode }: {
+  requestNode: (url: string, options?: RequestInit) => Promise<any>;
+}) {
+  const [status, setStatus] = useState<RecoveryStatus | null>(null);
+  const [policy, setPolicy] = useState<RecoveryPolicy | null>(null);
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [events, setEvents] = useState<RecoveryEvent[]>([]);
+  const [audit, setAudit] = useState<RecoveryAuditEntry[]>([]);
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditType, setAuditType] = useState("all");
+  const [auditFrom, setAuditFrom] = useState("");
+  const [auditTo, setAuditTo] = useState("");
+  const [statisticsWindow, setStatisticsWindow] = useState<"24h" | "7d" | "30d">("7d");
+  // Shared backend rules. Keep edits as a draft until the operator explicitly saves.
+  type ReliabilityRules = { minAttempts: number; warningSuccessRate: number; criticalSuccessRate: number; warningFailures: number; criticalFailures: number };
+  const [reliabilityRules, setReliabilityRules] = useState<ReliabilityRules>({ minAttempts: 3, warningSuccessRate: 80, criticalSuccessRate: 50, warningFailures: 2, criticalFailures: 4 });
+  const [ruleHistory, setRuleHistory] = useState<Array<{ id: string; at: string; before: ReliabilityRules; after: ReliabilityRules; note: string }>>([]);
+  const [ruleNote, setRuleNote] = useState("");
+  const [importedRules, setImportedRules] = useState<ReliabilityRules | null>(null);
+  const [importIntegrityStatus, setImportIntegrityStatus] = useState<string | null>(null);
+  // Steps 136-138: Import diagnostics are local operator data, never sent to the backend.
+  type ImportDiagnostic = { at: string; fileName: string; bytes: number; outcome: "verified" | "legacy" | "rejected"; checks: string[]; error?: string };
+  const [importDiagnostics, setImportDiagnostics] = useState<ImportDiagnostic[]>(() => {
+    try { const raw = JSON.parse(localStorage.getItem("tournament-threshold-import-diagnostics-v1") || "[]"); return Array.isArray(raw) ? raw.slice(0, 50) : []; }
+    catch { return []; }
+  });
+  const [diagnosticFilter, setDiagnosticFilter] = useState("all");
+  // Milestones 139-143: local-only diagnostic review and portable troubleshooting exports.
+  const [diagnosticSearch, setDiagnosticSearch] = useState("");
+  const [diagnosticFrom, setDiagnosticFrom] = useState("");
+  const [diagnosticTo, setDiagnosticTo] = useState("");
+  const [diagnosticSort, setDiagnosticSort] = useState<"newest" | "oldest">("newest");
+  // Milestones 144-148: paginated diagnostic review and single-record exports.
+  const [diagnosticPageSize, setDiagnosticPageSize] = useState(10);
+  const [diagnosticPage, setDiagnosticPage] = useState(1);
+  const [diagnosticCopyNotice, setDiagnosticCopyNotice] = useState("");
+  // Milestones 149-153: quick navigation, size/error review, and summary exports.
+  const [diagnosticMinBytes, setDiagnosticMinBytes] = useState("");
+  const [diagnosticMaxBytes, setDiagnosticMaxBytes] = useState("");
+  const [diagnosticErrorsOnly, setDiagnosticErrorsOnly] = useState(false);
+  const [diagnosticJumpPage, setDiagnosticJumpPage] = useState("1");
+  // Steps 154-163: expanded local-only diagnostic navigation, inspection and reports.
+  const [diagnosticFileFilter, setDiagnosticFileFilter] = useState("");
+  const [diagnosticCheckFilter, setDiagnosticCheckFilter] = useState("");
+  const [diagnosticShowChecks, setDiagnosticShowChecks] = useState(true);
+  const [diagnosticShowErrors, setDiagnosticShowErrors] = useState(true);
+  // Steps 164-173: local review controls. Never send diagnostic history to a capture node.
+  const [diagnosticSelected, setDiagnosticSelected] = useState<string[]>([]);
+  const [diagnosticPinnedOnly, setDiagnosticPinnedOnly] = useState(false);
+  const [diagnosticPinned, setDiagnosticPinned] = useState<string[]>(() => {
+    try { const raw = JSON.parse(localStorage.getItem("tournament-threshold-import-pins-v1") || "[]"); return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(0, 50) : []; }
+    catch { return []; }
+  });
+  const [diagnosticGroupBy, setDiagnosticGroupBy] = useState<"none" | "outcome" | "filename">("none");
+  // Steps 174-183: bulk triage and privacy-safe diagnostic export options.
+  const [diagnosticRedactExports, setDiagnosticRedactExports] = useState(false);
+  const [diagnosticBulkNotice, setDiagnosticBulkNotice] = useState("");
+  // Steps 184-193: local operator annotations, triage and report summaries.
+  const [diagnosticNotes, setDiagnosticNotes] = useState<Record<string, string>>(() => {
+    try { const raw: unknown = JSON.parse(localStorage.getItem("tournament-threshold-import-notes-v1") || "{}");
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      return Object.fromEntries(Object.entries(raw).filter(([key, value]) => key.length < 1000 && typeof value === "string").map(([key, value]) => [key, String(value).slice(0, 500)]));
+    } catch { return {}; }
+  });
+  // Steps 194-203: browser-local triage status and priority, separate from backend incidents.
+  type DiagnosticTriage = { status: "new" | "investigating" | "resolved"; priority: "low" | "normal" | "high" };
+  const [diagnosticTriage, setDiagnosticTriage] = useState<Record<string, DiagnosticTriage>>(() => {
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem("tournament-threshold-import-triage-v1") || "{}");
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      return Object.fromEntries(Object.entries(raw).filter(([key, value]) => {
+        if (key.length > 1000 || !value || typeof value !== "object" || Array.isArray(value)) return false;
+        const item = value as Record<string, unknown>;
+        return ["new", "investigating", "resolved"].includes(String(item.status)) && ["low", "normal", "high"].includes(String(item.priority));
+      })) as Record<string, DiagnosticTriage>;
+    } catch { return {}; }
+  });
+  const [diagnosticTriageStatusFilter, setDiagnosticTriageStatusFilter] = useState("all");
+  const [diagnosticTriagePriorityFilter, setDiagnosticTriagePriorityFilter] = useState("all");
+  const [diagnosticTriageBulkStatus, setDiagnosticTriageBulkStatus] = useState<DiagnosticTriage["status"]>("investigating");
+  const [diagnosticTriageBulkPriority, setDiagnosticTriageBulkPriority] = useState<DiagnosticTriage["priority"]>("high");
+  function triageFor(key: string): DiagnosticTriage { return diagnosticTriage[key] || { status: "new", priority: "normal" }; }
+  function updateDiagnosticTriage(keys: string[], change: Partial<DiagnosticTriage>) {
+    const valid = new Set(importDiagnostics.map(diagnosticKey));
+    setDiagnosticTriage(previous => {
+      const next = { ...previous };
+      for (const key of keys) {
+        if (!valid.has(key)) continue;
+        const value = { ...(previous[key] || { status: "new", priority: "normal" }), ...change };
+        if (value.status === "new" && value.priority === "normal") delete next[key]; else next[key] = value;
+      }
+      try { localStorage.setItem("tournament-threshold-import-triage-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+    setDiagnosticBulkNotice(`Updated triage for ${keys.filter(key => valid.has(key)).length} record(s).`);
+  }
+  function cleanOrphanedDiagnosticTriage() {
+    const valid = new Set(importDiagnostics.map(diagnosticKey));
+    const next = Object.fromEntries(Object.entries(diagnosticTriage).filter(([key]) => valid.has(key)));
+    const removed = Object.keys(diagnosticTriage).length - Object.keys(next).length;
+    setDiagnosticTriage(next);
+    try { localStorage.setItem("tournament-threshold-import-triage-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+    setDiagnosticBulkNotice(`Cleaned ${removed} orphaned triage entry/entries.`);
+  }
+  function exportDiagnosticTriageRecords() {
+    const records = filteredImportDiagnostics.map(item => ({ at: item.at, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName, outcome: item.outcome, ...triageFor(diagnosticKey(item)) }));
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-triage-records", schema: 1, exportedAt: new Date().toISOString(), filenamesRedacted: diagnosticRedactExports, records }, null, 2), "threshold-import-triage-records.json", "application/json;charset=utf-8");
+  }
+  // Steps 204-213: operator review shortcuts and portable, browser-local triage reporting.
+  const [diagnosticTriageOnlyOpen, setDiagnosticTriageOnlyOpen] = useState(false);
+  const [diagnosticTriageOnlyHigh, setDiagnosticTriageOnlyHigh] = useState(false);
+  const [diagnosticTriageReportIncludeNotes, setDiagnosticTriageReportIncludeNotes] = useState(false);
+  const [diagnosticTriageReportLimit, setDiagnosticTriageReportLimit] = useState(50);
+  function selectDiagnosticTriageMatches(predicate: (triage: DiagnosticTriage) => boolean) {
+    const keys = filteredImportDiagnostics.filter(item => predicate(triageFor(diagnosticKey(item)))).map(diagnosticKey);
+    setDiagnosticSelected(previous => Array.from(new Set([...previous, ...keys])));
+    setDiagnosticBulkNotice(`Selected ${keys.length} matching triage record(s).`);
+  }
+  function exportDiagnosticTriageCsv() {
+    const rows = filteredImportDiagnostics.slice(0, diagnosticTriageReportLimit).map(item => {
+      const t = triageFor(diagnosticKey(item));
+      return [item.at, diagnosticRedactExports ? "[redacted]" : item.fileName, item.outcome, t.status, t.priority, diagnosticTriageReportIncludeNotes ? (diagnosticNotes[diagnosticKey(item)] || "") : ""];
+    });
+    const safe = (value: string) => { const escaped = /^[\s]*[=+@\-]/.test(value) ? "'" + value : value; return '"' + escaped.replace(/"/g, '""') + '"'; };
+    downloadDiagnosticFile([["Timestamp", "Filename", "Outcome", "Review status", "Priority", "Operator note"], ...rows].map(row => row.map(safe).join(",")).join("\r\n"), "threshold-import-triage-review.csv", "text/csv;charset=utf-8");
+  }
+  function exportDiagnosticTriageReviewJson() {
+    const records = filteredImportDiagnostics.slice(0, diagnosticTriageReportLimit).map(item => ({
+      at: item.at, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName,
+      outcome: item.outcome, ...triageFor(diagnosticKey(item)),
+      ...(diagnosticTriageReportIncludeNotes ? { operatorNote: diagnosticNotes[diagnosticKey(item)] || "" } : {}),
+    }));
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-triage-review", schema: 1, exportedAt: new Date().toISOString(), filenamesRedacted: diagnosticRedactExports, totalMatching: filteredImportDiagnostics.length, exported: records.length, records }, null, 2), "threshold-import-triage-review.json", "application/json;charset=utf-8");
+  }
+  // Steps 214-223: triage age, review queues, and portable review snapshots.
+  const [diagnosticReviewAgeDays, setDiagnosticReviewAgeDays] = useState(0);
+  const [diagnosticReviewRejectedOnly, setDiagnosticReviewRejectedOnly] = useState(false);
+  const [diagnosticReviewMissingNotes, setDiagnosticReviewMissingNotes] = useState(false);
+  const [diagnosticReviewSort, setDiagnosticReviewSort] = useState<"chronological" | "priority">("chronological");
+  const [diagnosticReviewShowSummary, setDiagnosticReviewShowSummary] = useState(true);
+  const diagnosticReviewCutoff = Date.now() - diagnosticReviewAgeDays * 86400000;
+  function resetDiagnosticReviewQueue() {
+    setDiagnosticReviewAgeDays(0); setDiagnosticReviewRejectedOnly(false); setDiagnosticReviewMissingNotes(false);
+    setDiagnosticReviewSort("chronological"); setDiagnosticPage(1);
+  }
+  function exportDiagnosticReviewSnapshot() {
+    const records = filteredImportDiagnostics.slice(0, diagnosticTriageReportLimit).map(item => ({
+      at: item.at, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName,
+      outcome: item.outcome, ...triageFor(diagnosticKey(item)),
+      ...(diagnosticTriageReportIncludeNotes ? { operatorNote: diagnosticNotes[diagnosticKey(item)] || "" } : {}),
+    }));
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-review-snapshot", schema: 1,
+      exportedAt: new Date().toISOString(), filters: { minAgeDays: diagnosticReviewAgeDays,
+      rejectedOnly: diagnosticReviewRejectedOnly, missingNotesOnly: diagnosticReviewMissingNotes,
+      order: diagnosticReviewSort }, filenamesRedacted: diagnosticRedactExports,
+      totalMatching: filteredImportDiagnostics.length, records }, null, 2),
+      "threshold-import-review-snapshot.json", "application/json;charset=utf-8");
+  }
+  // Steps 224-233: local-only review ownership and overdue queue controls.
+  const [diagnosticReviewSlaDays, setDiagnosticReviewSlaDays] = useState(7);
+  const [diagnosticReviewOverdueOnly, setDiagnosticReviewOverdueOnly] = useState(false);
+  const [diagnosticReviewUnassignedOnly, setDiagnosticReviewUnassignedOnly] = useState(false);
+  const [diagnosticReviewOwnerFilter, setDiagnosticReviewOwnerFilter] = useState("");
+  const [diagnosticReviewBulkOwner, setDiagnosticReviewBulkOwner] = useState("");
+  const [diagnosticReviewOwners, setDiagnosticReviewOwners] = useState<Record<string, string>>(() => {
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem("tournament-threshold-import-owners-v1") || "{}");
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      return Object.fromEntries(Object.entries(raw).filter(([key, value]) => key.length < 1000 && typeof value === "string" && value.length <= 80)) as Record<string, string>;
+    } catch { return {}; }
+  });
+  function updateDiagnosticOwners(keys: string[], owner: string) {
+    const valid = new Set(importDiagnostics.map(diagnosticKey));
+    const cleaned = owner.trim().slice(0, 80);
+    setDiagnosticReviewOwners(previous => {
+      const next = { ...previous };
+      for (const key of keys) {
+        if (!valid.has(key)) continue;
+        if (cleaned) next[key] = cleaned; else delete next[key];
+      }
+      try { localStorage.setItem("tournament-threshold-import-owners-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+    setDiagnosticBulkNotice(`Updated ownership on ${keys.filter(key => valid.has(key)).length} record(s).`);
+  }
+  function cleanupDiagnosticOwners() {
+    const valid = new Set(importDiagnostics.map(diagnosticKey));
+    const next = Object.fromEntries(Object.entries(diagnosticReviewOwners).filter(([key]) => valid.has(key)));
+    setDiagnosticReviewOwners(next);
+    try { localStorage.setItem("tournament-threshold-import-owners-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+    setDiagnosticBulkNotice(`Cleaned ${Object.keys(diagnosticReviewOwners).length - Object.keys(next).length} orphaned owner entry/entries.`);
+  }
+  function resetDiagnosticOwnershipFilters() {
+    setDiagnosticReviewOverdueOnly(false); setDiagnosticReviewUnassignedOnly(false);
+    setDiagnosticReviewOwnerFilter(""); setDiagnosticPage(1);
+  }
+  function exportDiagnosticOverdueQueue() {
+    const cutoff = Date.now() - diagnosticReviewSlaDays * 86400000;
+    const records = filteredImportDiagnostics.filter(item => triageFor(diagnosticKey(item)).status !== "resolved" && Date.parse(item.at) <= cutoff).map(item => ({
+      at: item.at, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName,
+      outcome: item.outcome, ...triageFor(diagnosticKey(item)), owner: diagnosticReviewOwners[diagnosticKey(item)] || "",
+      ...(diagnosticTriageReportIncludeNotes ? { operatorNote: diagnosticNotes[diagnosticKey(item)] || "" } : {}),
+    }));
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-overdue-reviews", schema: 1,
+      exportedAt: new Date().toISOString(), slaDays: diagnosticReviewSlaDays,
+      filenamesRedacted: diagnosticRedactExports, records }, null, 2),
+      "threshold-import-overdue-reviews.json", "application/json;charset=utf-8");
+  }
+  const [diagnosticNotesOnly, setDiagnosticNotesOnly] = useState(false);
+  const [diagnosticNoteSearch, setDiagnosticNoteSearch] = useState("");
+  const [diagnosticIncludeNotesInExports, setDiagnosticIncludeNotesInExports] = useState(false);
+  function saveDiagnosticNote(key: string, note: string) {
+    setDiagnosticNotes(previous => {
+      const next = { ...previous }; const trimmed = note.slice(0, 500);
+      if (trimmed.trim()) next[key] = trimmed; else delete next[key];
+      try { localStorage.setItem("tournament-threshold-import-notes-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+  }
+  function clearSelectedDiagnosticNotes() {
+    const keys = diagnosticSelected.filter(key => diagnosticNotes[key]);
+    if (!keys.length || !window.confirm(`Remove operator notes from ${keys.length} selected record(s)?`)) return;
+    setDiagnosticNotes(previous => {
+      const next = { ...previous }; for (const key of keys) delete next[key];
+      try { localStorage.setItem("tournament-threshold-import-notes-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+    setDiagnosticBulkNotice(`Cleared ${keys.length} operator note(s).`);
+  }
+  function pruneOrphanedDiagnosticNotes() {
+    const valid = new Set(importDiagnostics.map(diagnosticKey));
+    const next = Object.fromEntries(Object.entries(diagnosticNotes).filter(([key]) => valid.has(key)));
+    const removed = Object.keys(diagnosticNotes).length - Object.keys(next).length;
+    setDiagnosticNotes(next);
+    try { localStorage.setItem("tournament-threshold-import-notes-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+    setDiagnosticBulkNotice(`Cleaned ${removed} orphaned operator note(s).`);
+  }
+
+
+  const diagnosticKey = (item: ImportDiagnostic) => JSON.stringify([item.at, item.fileName, item.bytes, item.outcome]);
+  function toggleDiagnosticPin(key: string) {
+    setDiagnosticPinned(previous => {
+      const next = previous.includes(key) ? previous.filter(x => x !== key) : [...previous, key].slice(-50);
+      try { localStorage.setItem("tournament-threshold-import-pins-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+  }
+  // Steps 244-253: browser-local review queue quick actions and workload snapshots.
+  const [reviewFocusOwner, setReviewFocusOwner] = useState("");
+  const [reviewFocusPriority, setReviewFocusPriority] = useState<"all" | "high" | "normal" | "low">("all");
+  const [reviewFocusStatus, setReviewFocusStatus] = useState<"all" | "new" | "investigating" | "resolved">("all");
+  const [reviewFocusOnlyOverdue, setReviewFocusOnlyOverdue] = useState(false);
+  const [reviewFocusOnlyUnassigned, setReviewFocusOnlyUnassigned] = useState(false);
+  const [reviewFocusSort, setReviewFocusSort] = useState<"age" | "priority">("age");
+  const [reviewFocusLimit, setReviewFocusLimit] = useState(25);
+  const [reviewFocusIncludeNotes, setReviewFocusIncludeNotes] = useState(false);
+  function resetReviewFocus() {
+    setReviewFocusOwner(""); setReviewFocusPriority("all"); setReviewFocusStatus("all");
+    setReviewFocusOnlyOverdue(false); setReviewFocusOnlyUnassigned(false);
+    setReviewFocusSort("age"); setReviewFocusLimit(25);
+  }
+  function exportReviewFocusSnapshot() {
+    const records = reviewFocusRows.slice(0, reviewFocusLimit).map(item => {
+      const key = diagnosticKey(item);
+      return { at: item.at, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName,
+        outcome: item.outcome, owner: diagnosticReviewOwners[key] || "", ...triageFor(key),
+        ...(reviewFocusIncludeNotes ? { note: diagnosticNotes[key] || "" } : {}) };
+    });
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-review-focus", schema: 1,
+      exportedAt: new Date().toISOString(), totalMatching: reviewFocusRows.length,
+      exportedCount: records.length, filenamesRedacted: diagnosticRedactExports,
+      filters: { owner: reviewFocusOwner, priority: reviewFocusPriority, status: reviewFocusStatus,
+        overdue: reviewFocusOnlyOverdue, unassigned: reviewFocusOnlyUnassigned,
+        sort: reviewFocusSort }, records }, null, 2), "review-focus-snapshot.json", "application/json;charset=utf-8");
+  }
+  // Steps 254-263: validated, browser-local review filter presets.
+  type ReviewPreset = { name: string; owner: string; priority: typeof reviewFocusPriority;
+    status: typeof reviewFocusStatus; overdue: boolean; unassigned: boolean;
+    sort: typeof reviewFocusSort; limit: number; includeNotes: boolean };
+  function validateReviewPreset(input: unknown): ReviewPreset {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Preset must be an object");
+    const v = input as Record<string, unknown>;
+    if (typeof v.name !== "string" || !v.name.trim() || v.name.length > 60) throw new Error("Preset name must be 1-60 characters");
+    if (typeof v.owner !== "string" || v.owner.length > 80) throw new Error("Owner filter must be at most 80 characters");
+    if (!["all", "high", "normal", "low"].includes(String(v.priority))) throw new Error("Invalid priority filter");
+    if (!["all", "new", "investigating", "resolved"].includes(String(v.status))) throw new Error("Invalid status filter");
+    if (typeof v.overdue !== "boolean" || typeof v.unassigned !== "boolean" || typeof v.includeNotes !== "boolean") throw new Error("Invalid boolean filter");
+    if (!["age", "priority"].includes(String(v.sort))) throw new Error("Invalid sort option");
+    if (![10, 25, 50].includes(Number(v.limit))) throw new Error("Invalid snapshot limit");
+    return v as ReviewPreset;
+  }
+  const [reviewPresets, setReviewPresets] = useState<ReviewPreset[]>(() => {
+    try {
+      const value: unknown = JSON.parse(localStorage.getItem("tournament-review-focus-presets-v1") || "[]");
+      return Array.isArray(value) ? value.slice(0, 20).flatMap(item => { try { return [validateReviewPreset(item)]; } catch { return []; } }) : [];
+    } catch { return []; }
+  });
+  const [reviewPresetName, setReviewPresetName] = useState("");
+  const [reviewPresetSelected, setReviewPresetSelected] = useState("");
+  const [reviewPresetMessage, setReviewPresetMessage] = useState("");
+  function persistReviewPresets(next: ReviewPreset[]) {
+    setReviewPresets(next);
+    try { localStorage.setItem("tournament-review-focus-presets-v1", JSON.stringify(next)); }
+    catch { setReviewPresetMessage("Preset updated in memory, but browser storage is unavailable."); }
+  }
+  function currentReviewPreset(name: string): ReviewPreset {
+    return { name, owner: reviewFocusOwner, priority: reviewFocusPriority, status: reviewFocusStatus,
+      overdue: reviewFocusOnlyOverdue, unassigned: reviewFocusOnlyUnassigned,
+      sort: reviewFocusSort, limit: reviewFocusLimit, includeNotes: reviewFocusIncludeNotes };
+  }
+  function saveReviewPreset() {
+    const name = reviewPresetName.trim();
+    try {
+      const preset = validateReviewPreset(currentReviewPreset(name));
+      const existing = reviewPresets.find(item => item.name.toLowerCase() === name.toLowerCase());
+      if (existing && !window.confirm(`Replace saved preset "${existing.name}"?`)) return;
+      if (!existing && reviewPresets.length >= 20) throw new Error("Maximum 20 presets. Delete one first.");
+      persistReviewPresets([...reviewPresets.filter(item => item.name.toLowerCase() !== name.toLowerCase()), preset]);
+      setReviewPresetSelected(name); setReviewPresetMessage(`Saved preset: ${name}`);
+    } catch (error) { setReviewPresetMessage(String(error)); }
+  }
+  function applyReviewPreset() {
+    const preset = reviewPresets.find(item => item.name === reviewPresetSelected);
+    if (!preset) { setReviewPresetMessage("Choose a saved preset."); return; }
+    setReviewFocusOwner(preset.owner); setReviewFocusPriority(preset.priority); setReviewFocusStatus(preset.status);
+    setReviewFocusOnlyOverdue(preset.overdue); setReviewFocusOnlyUnassigned(preset.unassigned);
+    setReviewFocusSort(preset.sort); setReviewFocusLimit(preset.limit); setReviewFocusIncludeNotes(preset.includeNotes);
+    setReviewPresetMessage(`Applied preset: ${preset.name}. No diagnostic records were changed.`);
+  }
+  function renameReviewPreset() {
+    const name = reviewPresetName.trim();
+    if (!reviewPresetSelected) return;
+    try {
+      const selected = reviewPresets.find(item => item.name === reviewPresetSelected);
+      if (!selected) throw new Error("Preset not found");
+      const renamed = validateReviewPreset({ ...selected, name });
+      if (reviewPresets.some(item => item.name.toLowerCase() === name.toLowerCase() && item.name !== selected.name)) throw new Error("A preset already has that name");
+      persistReviewPresets(reviewPresets.map(item => item.name === selected.name ? renamed : item));
+      setReviewPresetSelected(name); setReviewPresetMessage(`Renamed preset to ${name}`);
+    } catch (error) { setReviewPresetMessage(String(error)); }
+  }
+  function deleteReviewPreset() {
+    if (!reviewPresetSelected || !window.confirm(`Delete preset "${reviewPresetSelected}"?`)) return;
+    persistReviewPresets(reviewPresets.filter(item => item.name !== reviewPresetSelected));
+    setReviewPresetSelected(""); setReviewPresetMessage("Preset deleted. Current filters are unchanged.");
+  }
+  function exportReviewPresets() {
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-review-focus-presets", schema: 1,
+      exportedAt: new Date().toISOString(), presets: reviewPresets }, null, 2),
+      "review-focus-presets.json", "application/json;charset=utf-8");
+  }
+  async function importReviewPresets(file: File | undefined) {
+    if (!file) return;
+    try {
+      if (file.size > 32768) throw new Error("Preset import exceeds 32 KB");
+      const parsed: unknown = JSON.parse(await file.text());
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid preset file");
+      const backup = parsed as Record<string, unknown>;
+      if (backup.format !== "tournament-review-focus-presets" || backup.schema !== 1 || !Array.isArray(backup.presets)) throw new Error("Unsupported preset format");
+      if (backup.presets.length > 20) throw new Error("Import contains more than 20 presets");
+      const incoming = backup.presets.map(validateReviewPreset);
+      const names = incoming.map(item => item.name.toLowerCase());
+      if (new Set(names).size !== names.length) throw new Error("Import contains duplicate preset names");
+      const merged = [...reviewPresets];
+      for (const preset of incoming) {
+        const index = merged.findIndex(item => item.name.toLowerCase() === preset.name.toLowerCase());
+        if (index >= 0) merged[index] = preset; else merged.push(preset);
+      }
+      if (merged.length > 20) throw new Error("Import would exceed 20 saved presets");
+      if (!window.confirm(`Import ${incoming.length} preset(s)? Matching names will be replaced. No review records will change.`)) return;
+      persistReviewPresets(merged); setReviewPresetMessage(`Imported ${incoming.length} preset(s).`);
+    } catch (error) { setReviewPresetMessage(`Import rejected: ${String(error)}`); }
+  }
+  // Steps 234-243: browser-local owner workload and review handoff utilities.
+  const [diagnosticOwnerOnlyOpen, setDiagnosticOwnerOnlyOpen] = useState(false);
+  const [diagnosticOwnerOnlyHigh, setDiagnosticOwnerOnlyHigh] = useState(false);
+  const [diagnosticOwnerOnlyUnnoted, setDiagnosticOwnerOnlyUnnoted] = useState(false);
+  const [diagnosticOwnerSort, setDiagnosticOwnerSort] = useState<"existing" | "owner">("existing");
+  const [diagnosticOwnerHandoffNote, setDiagnosticOwnerHandoffNote] = useState("");
+  function selectOwnerReviewMatches(kind: "assigned" | "unassigned" | "overdue") {
+    const cutoff = Date.now() - diagnosticReviewSlaDays * 86400000;
+    const matches = filteredImportDiagnostics.filter(item => {
+      const key = diagnosticKey(item);
+      if (kind === "assigned") return Boolean(diagnosticReviewOwners[key]?.trim());
+      if (kind === "unassigned") return !diagnosticReviewOwners[key]?.trim();
+      return triageFor(key).status !== "resolved" && Date.parse(item.at) <= cutoff;
+    }).map(diagnosticKey);
+    setDiagnosticSelected(previous => Array.from(new Set([...previous, ...matches])));
+    setDiagnosticBulkNotice(`Selected ${matches.length} ${kind} review(s).`);
+  }
+  function handoffSelectedDiagnosticReviews() {
+    const owner = diagnosticReviewBulkOwner.trim();
+    const keys = selectedImportDiagnostics.map(diagnosticKey);
+    if (!owner || !keys.length) return;
+    const note = diagnosticOwnerHandoffNote.trim().slice(0, 500);
+    if (!window.confirm(`Assign ${keys.length} selected review(s) to ${owner}?${note ? " Add a handoff note?" : ""}`)) return;
+    updateDiagnosticOwners(keys, owner);
+    if (note) {
+      const valid = new Set(importDiagnostics.map(diagnosticKey));
+      setDiagnosticNotes(previous => {
+        const next = { ...previous };
+        for (const key of keys) if (valid.has(key)) next[key] = [previous[key], `Handoff to ${owner}: ${note}`].filter(Boolean).join(" | ").slice(0, 500);
+        try { localStorage.setItem("tournament-threshold-import-notes-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+        return next;
+      });
+    }
+    setDiagnosticOwnerHandoffNote("");
+  }
+  function exportDiagnosticOwnerWorkload() {
+    const records = filteredImportDiagnostics.map(item => ({
+      at: item.at, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName,
+      outcome: item.outcome, owner: diagnosticReviewOwners[diagnosticKey(item)] || "",
+      ...triageFor(diagnosticKey(item)),
+      ...(diagnosticTriageReportIncludeNotes ? { operatorNote: diagnosticNotes[diagnosticKey(item)] || "" } : {}),
+    }));
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-owner-workload", schema: 1,
+      exportedAt: new Date().toISOString(), filenamesRedacted: diagnosticRedactExports,
+      ownerOnlyOpen: diagnosticOwnerOnlyOpen, ownerOnlyHigh: diagnosticOwnerOnlyHigh,
+      ownerOnlyUnnoted: diagnosticOwnerOnlyUnnoted, records }, null, 2),
+      "threshold-import-owner-workload.json", "application/json;charset=utf-8");
+  }
+  const filteredImportDiagnostics = importDiagnostics.filter(item => {
+    if (diagnosticFilter !== "all" && item.outcome !== diagnosticFilter) return false;
+    if (diagnosticPinnedOnly && !diagnosticPinned.includes(diagnosticKey(item))) return false;
+    const triage = triageFor(diagnosticKey(item));
+    if (diagnosticTriageStatusFilter !== "all" && triage.status !== diagnosticTriageStatusFilter) return false;
+    if (diagnosticTriagePriorityFilter !== "all" && triage.priority !== diagnosticTriagePriorityFilter) return false;
+    if (diagnosticTriageOnlyOpen && triage.status === "resolved") return false;
+    if (diagnosticTriageOnlyHigh && triage.priority !== "high") return false;
+    if (diagnosticReviewAgeDays > 0 && Date.parse(item.at) > diagnosticReviewCutoff) return false;
+    if (diagnosticReviewRejectedOnly && item.outcome !== "rejected") return false;
+    if (diagnosticReviewMissingNotes && Boolean(diagnosticNotes[diagnosticKey(item)]?.trim())) return false;
+    if (diagnosticReviewOverdueOnly && (triage.status === "resolved" || Date.parse(item.at) > Date.now() - diagnosticReviewSlaDays * 86400000)) return false;
+    const owner = diagnosticReviewOwners[diagnosticKey(item)] || "";
+    if (diagnosticReviewUnassignedOnly && owner.trim()) return false;
+    if (diagnosticReviewOwnerFilter.trim() && !owner.toLowerCase().includes(diagnosticReviewOwnerFilter.trim().toLowerCase())) return false;
+    if (diagnosticOwnerOnlyOpen && triage.status === "resolved") return false;
+    if (diagnosticOwnerOnlyHigh && triage.priority !== "high") return false;
+    if (diagnosticOwnerOnlyUnnoted && Boolean(diagnosticNotes[diagnosticKey(item)]?.trim())) return false;
+    const note = diagnosticNotes[diagnosticKey(item)] || "";
+    if (diagnosticNotesOnly && !note.trim()) return false;
+    if (diagnosticNoteSearch.trim() && !note.toLowerCase().includes(diagnosticNoteSearch.trim().toLowerCase())) return false;
+    if (diagnosticErrorsOnly && !item.error) return false;
+    if (diagnosticFileFilter.trim() && !item.fileName.toLowerCase().includes(diagnosticFileFilter.trim().toLowerCase())) return false;
+    if (diagnosticCheckFilter.trim() && !item.checks.some(check => check.toLowerCase().includes(diagnosticCheckFilter.trim().toLowerCase()))) return false;
+    if (diagnosticMinBytes !== "" && item.bytes < Number(diagnosticMinBytes)) return false;
+    if (diagnosticMaxBytes !== "" && item.bytes > Number(diagnosticMaxBytes)) return false;
+    const query = diagnosticSearch.trim().toLowerCase();
+    if (query && ![item.fileName, item.outcome, item.error || "", ...item.checks].join(" ").toLowerCase().includes(query)) return false;
+    const timestamp = Date.parse(item.at);
+    if (!Number.isFinite(timestamp)) return false;
+    if (diagnosticFrom && timestamp < new Date(`${diagnosticFrom}T00:00:00`).getTime()) return false;
+    if (diagnosticTo && timestamp > new Date(`${diagnosticTo}T23:59:59.999`).getTime()) return false;
+    return true;
+  }).sort((a, b) => diagnosticSort === "newest" ? Date.parse(b.at) - Date.parse(a.at) : Date.parse(a.at) - Date.parse(b.at));
+  if (diagnosticReviewSort === "priority") {
+    const weight = { high: 0, normal: 1, low: 2 };
+    filteredImportDiagnostics.sort((a, b) => weight[triageFor(diagnosticKey(a)).priority] - weight[triageFor(diagnosticKey(b)).priority] || Date.parse(b.at) - Date.parse(a.at));
+  }
+  if (diagnosticOwnerSort === "owner") filteredImportDiagnostics.sort((a, b) =>
+    (diagnosticReviewOwners[diagnosticKey(a)] || "\uffff").localeCompare(diagnosticReviewOwners[diagnosticKey(b)] || "\uffff") || Date.parse(b.at) - Date.parse(a.at));
+  const diagnosticOwnerWorkload = filteredImportDiagnostics.reduce<Record<string, { total: number; open: number; overdue: number; high: number }>>((acc, item) => {
+    const key = diagnosticKey(item);
+    const owner = diagnosticReviewOwners[key]?.trim() || "(unassigned)";
+    const triage = triageFor(key);
+    const stats = acc[owner] || { total: 0, open: 0, overdue: 0, high: 0 };
+    stats.total += 1;
+    if (triage.status !== "resolved") { stats.open += 1; if (Date.parse(item.at) <= Date.now() - diagnosticReviewSlaDays * 86400000) stats.overdue += 1; }
+    if (triage.priority === "high") stats.high += 1;
+    acc[owner] = stats;
+    return acc;
+  }, {});
+  const reviewFocusRows = filteredImportDiagnostics.filter(item => {
+    const key = diagnosticKey(item);
+    const owner = diagnosticReviewOwners[key]?.trim() || "";
+    const triage = triageFor(key);
+    if (reviewFocusOwner && !owner.toLowerCase().includes(reviewFocusOwner.toLowerCase().trim())) return false;
+    if (reviewFocusPriority !== "all" && triage.priority !== reviewFocusPriority) return false;
+    if (reviewFocusStatus !== "all" && triage.status !== reviewFocusStatus) return false;
+    if (reviewFocusOnlyUnassigned && owner) return false;
+    if (reviewFocusOnlyOverdue && (triage.status === "resolved" || Date.parse(item.at) > Date.now() - diagnosticReviewSlaDays * 86400000)) return false;
+    return true;
+  }).sort((a, b) => {
+    if (reviewFocusSort === "priority") {
+      const rank = { high: 0, normal: 1, low: 2 };
+      const delta = rank[triageFor(diagnosticKey(a)).priority] - rank[triageFor(diagnosticKey(b)).priority];
+      if (delta) return delta;
+    }
+    return Date.parse(a.at) - Date.parse(b.at);
+  });
+  const reviewFocusOpen = reviewFocusRows.filter(item => triageFor(diagnosticKey(item)).status !== "resolved").length;
+  const reviewFocusHigh = reviewFocusRows.filter(item => triageFor(diagnosticKey(item)).priority === "high").length;
+  const reviewFocusUnassigned = reviewFocusRows.filter(item => !diagnosticReviewOwners[diagnosticKey(item)]?.trim()).length;
+  const diagnosticReviewOpenCount = filteredImportDiagnostics.filter(item => triageFor(diagnosticKey(item)).status !== "resolved").length;
+  const diagnosticReviewOverdueCount = filteredImportDiagnostics.filter(item => triageFor(diagnosticKey(item)).status !== "resolved" && Date.parse(item.at) <= Date.now() - diagnosticReviewSlaDays * 86400000).length;
+  const diagnosticReviewUnassignedCount = filteredImportDiagnostics.filter(item => !diagnosticReviewOwners[diagnosticKey(item)]?.trim()).length;
+  const diagnosticReviewUnnotedCount = filteredImportDiagnostics.filter(item => !diagnosticNotes[diagnosticKey(item)]?.trim()).length;
+  const diagnosticReviewOldest = filteredImportDiagnostics.reduce<number | null>((oldest, item) => {
+    const at = Date.parse(item.at); return Number.isFinite(at) && (oldest === null || at < oldest) ? at : oldest;
+  }, null);
+  const diagnosticGroups = filteredImportDiagnostics.reduce<Record<string, number>>((acc, item) => {
+    const group = diagnosticGroupBy === "filename" ? item.fileName : diagnosticGroupBy === "outcome" ? item.outcome : "All";
+    acc[group] = (acc[group] || 0) + 1;
+    return acc;
+  }, {});
+  const selectedImportDiagnostics = importDiagnostics.filter(item => diagnosticSelected.includes(diagnosticKey(item)));
+  const diagnosticSelectedMatching = filteredImportDiagnostics.filter(item => diagnosticSelected.includes(diagnosticKey(item))).length;
+  const diagnosticSelectedRejected = selectedImportDiagnostics.filter(item => item.outcome === "rejected").length;
+  const diagnosticSelectedPinned = selectedImportDiagnostics.filter(item => diagnosticPinned.includes(diagnosticKey(item))).length;
+  const diagnosticAnnotatedCount = filteredImportDiagnostics.filter(item => Boolean(diagnosticNotes[diagnosticKey(item)]?.trim())).length;
+  const diagnosticTriageCounts = filteredImportDiagnostics.reduce<Record<string, number>>((counts, item) => { const t = triageFor(diagnosticKey(item)); counts[`status:${t.status}`] = (counts[`status:${t.status}`] || 0) + 1; counts[`priority:${t.priority}`] = (counts[`priority:${t.priority}`] || 0) + 1; return counts; }, {});
+  const diagnosticDays = filteredImportDiagnostics.reduce<Record<string, number>>((acc, item) => { const day = item.at.slice(0, 10); acc[day] = (acc[day] || 0) + 1; return acc; }, {});
+  const diagnosticErrorTypes = filteredImportDiagnostics.filter(item => item.error).reduce<Record<string, number>>((acc, item) => { const type = (item.error || "").split(":")[0].slice(0, 80); acc[type] = (acc[type] || 0) + 1; return acc; }, {});
+  function exportDiagnosticTriageSummary() {
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-triage", schema: 1, exportedAt: new Date().toISOString(), matching: filteredImportDiagnostics.length, annotated: diagnosticAnnotatedCount, byDay: diagnosticDays, byError: diagnosticErrorTypes }, null, 2), "threshold-import-triage.json", "application/json;charset=utf-8");
+  }
+  function exportDiagnosticNotes() {
+    const records = filteredImportDiagnostics.filter(item => diagnosticNotes[diagnosticKey(item)]?.trim()).map(item => ({ at: item.at, outcome: item.outcome, fileName: diagnosticRedactExports ? "[redacted]" : item.fileName, note: diagnosticNotes[diagnosticKey(item)] }));
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-operator-notes", schema: 1, exportedAt: new Date().toISOString(), records }, null, 2), "threshold-import-operator-notes.json", "application/json;charset=utf-8");
+  }
+  function exportSafeDiagnostic(item: ImportDiagnostic): ImportDiagnostic {
+    const note = diagnosticIncludeNotesInExports ? diagnosticNotes[diagnosticKey(item)] : undefined;
+    const result = { ...item, ...(note ? { operatorNote: note } : {}), triage: triageFor(diagnosticKey(item)) };
+    return (diagnosticRedactExports ? { ...result, fileName: "[redacted]" } : result) as ImportDiagnostic;
+  }
+  function invertVisibleDiagnosticSelection() {
+    const visible = new Set(visibleImportDiagnostics.map(diagnosticKey));
+    setDiagnosticSelected(previous => Array.from(new Set([...previous.filter(key => !visible.has(key)), ...visibleImportDiagnostics.filter(item => !previous.includes(diagnosticKey(item))).map(diagnosticKey)])));
+  }
+  function selectDiagnosticSubset(kind: "rejected" | "pinned") {
+    const matches = filteredImportDiagnostics.filter(item => kind === "rejected" ? item.outcome === "rejected" : diagnosticPinned.includes(diagnosticKey(item)));
+    setDiagnosticSelected(previous => Array.from(new Set([...previous, ...matches.map(diagnosticKey)])));
+    setDiagnosticBulkNotice(`Selected ${matches.length} matching ${kind} record(s).`);
+  }
+  function unpinSelectedDiagnostics() {
+    const selected = new Set(diagnosticSelected);
+    setDiagnosticPinned(previous => {
+      const next = previous.filter(key => !selected.has(key));
+      try { localStorage.setItem("tournament-threshold-import-pins-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+    setDiagnosticBulkNotice("Removed pins from selected records.");
+  }
+  function removeUnpinnedDiagnostics() {
+    const pinned = new Set(diagnosticPinned);
+    const count = importDiagnostics.filter(item => !pinned.has(diagnosticKey(item))).length;
+    if (!count || !window.confirm(`Delete ${count} unpinned diagnostic record(s) from this browser?`)) return;
+    setImportDiagnostics(previous => {
+      const next = previous.filter(item => pinned.has(diagnosticKey(item)));
+      try { localStorage.setItem("tournament-threshold-import-diagnostics-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+    setDiagnosticSelected([]); setDiagnosticPage(1);
+    setDiagnosticBulkNotice(`Deleted ${count} unpinned record(s).`);
+  }
+  function pruneOrphanedDiagnosticPins() {
+    const valid = new Set(importDiagnostics.map(diagnosticKey));
+    const next = diagnosticPinned.filter(key => valid.has(key));
+    const removed = diagnosticPinned.length - next.length;
+    setDiagnosticPinned(next);
+    try { localStorage.setItem("tournament-threshold-import-pins-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+    setDiagnosticBulkNotice(`Removed ${removed} orphaned pin(s).`);
+  }
+  function exportSelectedDiagnosticsCsv() {
+    if (!selectedImportDiagnostics.length) return;
+    const csv = (value: unknown) => { const raw = String(value ?? ""); const safe = /^[\s]*[=+@\-\t\r]/.test(raw) ? `'${raw}` : raw; return `"${safe.replace(/"/g, '""')}"`; };
+    const rows = selectedImportDiagnostics.map(exportSafeDiagnostic);
+    const lines = [["Timestamp", "File", "Bytes", "Result", "Checks", "Error"].map(csv).join(","), ...rows.map(item => [item.at, item.fileName, item.bytes, item.outcome, item.checks.join("; "), item.error || ""].map(csv).join(","))];
+    downloadDiagnosticFile(lines.join("\r\n"), "threshold-import-selected.csv", "text/csv;charset=utf-8");
+  }
+  function exportPinnedDiagnostics() {
+    const rows = importDiagnostics.filter(item => diagnosticPinned.includes(diagnosticKey(item))).map(exportSafeDiagnostic);
+    if (!rows.length) return;
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-diagnostics", schema: 1, exportedAt: new Date().toISOString(), pinnedOnly: true, filenamesRedacted: diagnosticRedactExports, records: rows }, null, 2), "threshold-import-pinned.json", "application/json;charset=utf-8");
+  }
+
+  function exportSelectedDiagnostics() {
+    if (!selectedImportDiagnostics.length) return;
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-diagnostics", schema: 1, exportedAt: new Date().toISOString(), selection: true, filenamesRedacted: diagnosticRedactExports, records: selectedImportDiagnostics.map(exportSafeDiagnostic) }, null, 2), "threshold-import-selected.json", "application/json;charset=utf-8");
+  }
+  function deleteSelectedDiagnostics() {
+    if (!selectedImportDiagnostics.length || !window.confirm(`Delete ${selectedImportDiagnostics.length} selected local diagnostic record(s)?`)) return;
+    const selected = new Set(diagnosticSelected);
+    setImportDiagnostics(previous => {
+      const next = previous.filter(item => !selected.has(diagnosticKey(item)));
+      try { localStorage.setItem("tournament-threshold-import-diagnostics-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+    setDiagnosticSelected([]);
+    setDiagnosticPage(1);
+  }
+  const diagnosticCounts = { verified: filteredImportDiagnostics.filter(x => x.outcome === "verified").length, legacy: filteredImportDiagnostics.filter(x => x.outcome === "legacy").length, rejected: filteredImportDiagnostics.filter(x => x.outcome === "rejected").length };
+  const diagnosticPageCount = Math.max(1, Math.ceil(filteredImportDiagnostics.length / diagnosticPageSize));
+  const safeDiagnosticPage = Math.min(diagnosticPage, diagnosticPageCount);
+  const visibleImportDiagnostics = filteredImportDiagnostics.slice((safeDiagnosticPage - 1) * diagnosticPageSize, safeDiagnosticPage * diagnosticPageSize);
+  const diagnosticSuccessPercent = filteredImportDiagnostics.length ? Math.round((diagnosticCounts.verified + diagnosticCounts.legacy) * 100 / filteredImportDiagnostics.length) : null;
+  const diagnosticUniqueFiles = new Set(filteredImportDiagnostics.map(item => item.fileName)).size;
+  const diagnosticAverageBytes = filteredImportDiagnostics.length ? Math.round(filteredImportDiagnostics.reduce((sum, item) => sum + item.bytes, 0) / filteredImportDiagnostics.length) : null;
+  const diagnosticTotalChecks = filteredImportDiagnostics.reduce((sum, item) => sum + item.checks.length, 0);
+  const diagnosticLatestAttempt = importDiagnostics.length ? importDiagnostics.reduce((latest, item) => Date.parse(item.at) > Date.parse(latest.at) ? item : latest) : null;
+  const diagnosticVisibleStart = filteredImportDiagnostics.length ? (safeDiagnosticPage - 1) * diagnosticPageSize + 1 : 0;
+  const diagnosticVisibleEnd = Math.min(safeDiagnosticPage * diagnosticPageSize, filteredImportDiagnostics.length);
+  function exportSingleDiagnostic(item: ImportDiagnostic) {
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-diagnostic", schema: 1, exportedAt: new Date().toISOString(), filenamesRedacted: diagnosticRedactExports, record: exportSafeDiagnostic(item) }, null, 2), `threshold-import-${item.outcome}-${item.at.replace(/[^0-9A-Za-z]/g, "-")}.json`, "application/json;charset=utf-8");
+  }
+  async function copySingleDiagnostic(item: ImportDiagnostic) {
+    try {
+      await navigator.clipboard.writeText([`Time: ${item.at}`, `File: ${item.fileName}`, `Size: ${item.bytes} bytes`, `Result: ${item.outcome}`, ...item.checks.map(check => `Check: ${check}`), ...(item.error ? [`Error: ${item.error}`] : [])].join("\n"));
+      setDiagnosticCopyNotice(`Copied details for ${item.fileName}`);
+    } catch { setDiagnosticCopyNotice("Clipboard unavailable. Use the individual JSON export instead."); }
+  }
+  function downloadDiagnosticFile(content: string, filename: string, type: string) {
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const link = document.createElement("a"); link.href = url; link.download = filename; link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function exportImportDiagnosticsJson() {
+    // Include only the already-displayed metadata, never the imported configuration or its contents.
+    downloadDiagnosticFile(JSON.stringify({ format: "tournament-threshold-import-diagnostics", schema: 1, exportedAt: new Date().toISOString(), filters: { outcome: diagnosticFilter, search: diagnosticSearch, from: diagnosticFrom, to: diagnosticTo, minBytes: diagnosticMinBytes, maxBytes: diagnosticMaxBytes, errorsOnly: diagnosticErrorsOnly }, summary: diagnosticCounts, filenamesRedacted: diagnosticRedactExports, records: filteredImportDiagnostics.map(exportSafeDiagnostic) }, null, 2), "threshold-import-diagnostics.json", "application/json;charset=utf-8");
+  }
+  function exportDiagnosticSummary() {
+    const count = filteredImportDiagnostics.length;
+    const totalBytes = filteredImportDiagnostics.reduce((sum, item) => sum + item.bytes, 0);
+    const report = { format: "tournament-threshold-import-diagnostic-summary", schema: 1, exportedAt: new Date().toISOString(), filters: { outcome: diagnosticFilter, search: diagnosticSearch, from: diagnosticFrom, to: diagnosticTo, minBytes: diagnosticMinBytes, maxBytes: diagnosticMaxBytes, errorsOnly: diagnosticErrorsOnly }, totals: { records: count, ...diagnosticCounts, accepted: diagnosticCounts.verified + diagnosticCounts.legacy, acceptancePercent: diagnosticSuccessPercent, totalFileBytes: totalBytes, averageFileBytes: count ? Math.round(totalBytes / count) : null } };
+    downloadDiagnosticFile(JSON.stringify(report, null, 2), "threshold-import-summary.json", "application/json;charset=utf-8");
+  }
+  function exportDiagnosticMarkdown() {
+    // Markdown contains metadata only, not imported configuration values.
+    const lines = ["# Threshold backup import diagnostic report", "", `Generated: ${new Date().toISOString()}`, `Matching attempts: ${filteredImportDiagnostics.length}`, `Verified: ${diagnosticCounts.verified}`, `Legacy: ${diagnosticCounts.legacy}`, `Rejected: ${diagnosticCounts.rejected}`, `Acceptance: ${diagnosticSuccessPercent === null ? "N/A" : `${diagnosticSuccessPercent}%`}`, "", "## Records", ""];
+    for (const item of filteredImportDiagnostics.map(exportSafeDiagnostic)) {
+      lines.push(`### ${item.at} | ${item.outcome}`, `File: ${item.fileName.replace(/[\r\n]/g, " ")}`, `Size: ${item.bytes} bytes`, ...(diagnosticIncludeNotesInExports && diagnosticNotes[diagnosticKey(item)] ? [`- Operator note: ${diagnosticNotes[diagnosticKey(item)].replace(/[\r\n]/g, " ")}`] : []), ...item.checks.map(check => `- Passed: ${check.replace(/[\r\n]/g, " ")}`), ...(item.error ? [`- Error: ${item.error.replace(/[\r\n]/g, " ")}`] : []), "");
+    }
+    downloadDiagnosticFile(lines.join("\n"), "threshold-import-diagnostics.md", "text/markdown;charset=utf-8");
+  }
+  function recordImportDiagnostic(item: ImportDiagnostic) {
+    setImportDiagnostics(previous => {
+      const next = [item, ...previous].slice(0, 50);
+      try { localStorage.setItem("tournament-threshold-import-diagnostics-v1", JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+  }
+  function exportImportDiagnostics() {
+    const rows = filteredImportDiagnostics.map(exportSafeDiagnostic);
+    const csv = (value: unknown) => { const raw = String(value ?? ""); const safe = /^[\s]*[=+@\-\t\r]/.test(raw) ? `'${raw}` : raw; return `"${safe.replace(/"/g, '""')}"`; };
+    const content = [["Timestamp", "File", "Bytes", "Result", "Checks", "Error"].map(csv).join(","), ...rows.map(item => [item.at, item.fileName, item.bytes, item.outcome, item.checks.join("; "), item.error ?? ""].map(csv).join(","))].join("\r\n");
+    downloadDiagnosticFile(content, "threshold-import-diagnostics.csv", "text/csv;charset=utf-8");
+  }
+
+  const [importFileName, setImportFileName] = useState("");
+  const [selectedImportFields, setSelectedImportFields] = useState<Array<keyof ReliabilityRules>>([]);
+  const [rulesVersion, setRulesVersion] = useState<number | null>(null);
+  const [rulesConflict, setRulesConflict] = useState(false);
+  const [rulesDirty, setRulesDirty] = useState(false);
+  const rulesDirtyRef = useRef(false);
+  const [rulesSaving, setRulesSaving] = useState(false);
+  const [rulesError, setRulesError] = useState<string | null>(null);
+  const [rulesReady, setRulesReady] = useState(false);
+  const rulesVersionRef = useRef<number | null>(null);
+  useEffect(() => { rulesVersionRef.current = rulesVersion; }, [rulesVersion]);
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const response = await requestNode("/api/captures/reliability-rules");
+        if (!active) return;
+        if (!rulesDirtyRef.current) { setReliabilityRules(response.rules); setRulesVersion(response.version); }
+        else if (rulesVersionRef.current !== null && response.version !== rulesVersionRef.current) setRulesConflict(true);
+        setRulesReady(true);
+        try { const historyResponse = await requestNode("/api/captures/reliability-rules/history"); if (active) setRuleHistory(historyResponse.changes ?? []); } catch { /* history is supplementary */ }
+        setRulesError(null);
+      } catch (error) { if (active) setRulesError(String(error)); }
+    };
+    void poll(); const timer = window.setInterval(() => void poll(), 10000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [requestNode]);
+  function editReliabilityRules(next: (previous: ReliabilityRules) => ReliabilityRules) {
+    rulesDirtyRef.current = true; setRulesDirty(true); setReliabilityRules(next);
+  }
+  async function saveReliabilityRules() {
+    if (rulesSaving || !rulesReady) return;
+    setRulesSaving(true);
+    try {
+      const response = await requestNode("/api/captures/reliability-rules", { method: "PUT", headers: { "Content-Type": "application/json", "X-Operator-Note": encodeURIComponent(ruleNote.slice(0, 300)) }, body: JSON.stringify({ rules: reliabilityRules, version: rulesVersion }) });
+      setReliabilityRules(response.rules); setRulesVersion(response.version); setRulesConflict(false); rulesDirtyRef.current = false; setRulesDirty(false); setRulesError(null); setRuleNote("");
+      const historyResponse = await requestNode("/api/captures/reliability-rules/history"); setRuleHistory(historyResponse.changes ?? []);
+    } catch (error) { setRulesError(String(error)); if (String(error).includes("409") || String(error).toLowerCase().includes("conflict") || String(error).includes("changed on another dashboard")) setRulesConflict(true); }
+    finally { setRulesSaving(false); }
+  }
+  async function restoreHistoricalRules(changeId: string, snapshot: "before" | "after") {
+    if (rulesSaving || rulesVersion === null) return;
+    if (rulesDirty && !window.confirm("Discard unsaved threshold edits and restore a historical configuration?")) return;
+    if (!window.confirm(`Restore the ${snapshot} configuration from this history entry? This creates a new audited version.`)) return;
+    setRulesSaving(true);
+    try {
+      const response = await requestNode("/api/captures/reliability-rules/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ changeId, snapshot, version: rulesVersion }) });
+      setReliabilityRules(response.rules); setRulesVersion(response.version); setRulesConflict(false);
+      rulesDirtyRef.current = false; setRulesDirty(false); setRulesError(null); setRuleNote("");
+      const historyResponse = await requestNode("/api/captures/reliability-rules/history"); setRuleHistory(historyResponse.changes ?? []);
+    } catch (error) {
+      setRulesError(String(error));
+      if (String(error).includes("409") || String(error).includes("changed on another dashboard")) setRulesConflict(true);
+    } finally { setRulesSaving(false); }
+  }
+  // Step 135: SHA-256 detects accidental changes to the five canonical rule values.
+  // It is an integrity checksum, not a digital signature or proof of who created a backup.
+  function canonicalReliabilityRules(rules: ReliabilityRules): string {
+    return JSON.stringify([rules.minAttempts, rules.warningSuccessRate, rules.criticalSuccessRate, rules.warningFailures, rules.criticalFailures]);
+  }
+  async function reliabilityRulesChecksum(rules: ReliabilityRules): Promise<string> {
+    if (!globalThis.crypto?.subtle) throw new Error("SHA-256 is unavailable. Use localhost or a secure HTTPS connection.");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalReliabilityRules(rules)));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  }
+  // Step 133/135: Portable JSON backup with verifiable rule-value checksum.
+  async function exportReliabilityRules() {
+    if (!rulesReady || rulesVersion === null) return;
+    try {
+      const payload = { format: "tournament-reliability-thresholds", schemaVersion: 2, exportedAt: new Date().toISOString(), sourceVersion: rulesVersion, rules: reliabilityRules, integrity: { algorithm: "SHA-256", checksum: await reliabilityRulesChecksum(reliabilityRules) } };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a"); link.href = url; link.download = `reliability-thresholds-v${rulesVersion}.json`; link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { setRulesError(`Export failed: ${String(error)}`); }
+  }
+  function validateImportedRules(value: unknown): ReliabilityRules {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rules object");
+    const data = value as Record<string, unknown>;
+    const ranges: Record<keyof ReliabilityRules, [number, number]> = { minAttempts: [1, 100], warningSuccessRate: [0, 100], criticalSuccessRate: [0, 100], warningFailures: [1, 100], criticalFailures: [1, 100] };
+    const result = {} as ReliabilityRules;
+    for (const key of Object.keys(ranges) as Array<keyof ReliabilityRules>) {
+      const n = data[key]; const [min, max] = ranges[key];
+      if (typeof n !== "number" || !Number.isInteger(n) || n < min || n > max) throw new Error(`Invalid ${key}: expected integer ${min}-${max}`);
+      result[key] = n;
+    }
+    if (result.criticalSuccessRate > result.warningSuccessRate || result.criticalFailures < result.warningFailures) throw new Error("Critical thresholds must be at least as severe as warning thresholds");
+    return result;
+  }
+  async function previewReliabilityImport(file: File | undefined) {
+    setImportedRules(null); setImportFileName(""); setSelectedImportFields([]); setImportIntegrityStatus(null); setRulesError(null);
+    if (!file) return;
+    const checks: string[] = [];
+    try {
+      if (file.size > 65536) throw new Error("Import file exceeds 64 KB");
+      checks.push("File size within 64 KB limit");
+      const parsed: unknown = JSON.parse(await file.text());
+      checks.push("Valid JSON syntax");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid backup file");
+      const backup = parsed as Record<string, unknown>;
+      if (backup.format !== "tournament-reliability-thresholds" || (backup.schemaVersion !== 1 && backup.schemaVersion !== 2)) throw new Error("Unsupported backup format or schema version");
+      checks.push(`Supported schema version ${backup.schemaVersion}`);
+      const validated = validateImportedRules(backup.rules);
+      checks.push("All five rule fields valid and thresholds consistent");
+      let outcome: ImportDiagnostic["outcome"] = "legacy";
+      if (backup.schemaVersion === 2) {
+        const integrity = backup.integrity;
+        if (!integrity || typeof integrity !== "object" || Array.isArray(integrity)) throw new Error("Missing backup integrity information");
+        const record = integrity as Record<string, unknown>;
+        if (record.algorithm !== "SHA-256" || typeof record.checksum !== "string" || !/^[a-f0-9]{64}$/.test(record.checksum)) throw new Error("Invalid SHA-256 checksum format");
+        checks.push("SHA-256 checksum format valid");
+        if (await reliabilityRulesChecksum(validated) !== record.checksum) throw new Error("SHA-256 mismatch: backup threshold values were modified or corrupted");
+        checks.push("SHA-256 checksum matches rule values");
+        outcome = "verified";
+        setImportIntegrityStatus("SHA-256 verified: threshold values match the exported checksum. This does not authenticate the backup source.");
+      } else {
+        checks.push("Legacy backup: no checksum available");
+        setImportIntegrityStatus("Legacy backup (schema 1): values validated, but no integrity checksum is available.");
+      }
+      setImportedRules(validated); setImportFileName(file.name);
+      setSelectedImportFields((Object.keys(validated) as Array<keyof ReliabilityRules>).filter(key => validated[key] !== reliabilityRules[key]));
+      recordImportDiagnostic({ at: new Date().toISOString(), fileName: file.name, bytes: file.size, outcome, checks });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRulesError(`Import rejected: ${message}`);
+      recordImportDiagnostic({ at: new Date().toISOString(), fileName: file.name, bytes: file.size, outcome: "rejected", checks, error: message });
+    }
+  }
+  // Step 134: Restore only selected fields. Validate the merged result before editing.
+  const mergedImportRules = importedRules ? ({ ...reliabilityRules, ...Object.fromEntries(selectedImportFields.map(key => [key, importedRules[key]])) } as ReliabilityRules) : null;
+  let importMergeError: string | null = null;
+  if (mergedImportRules) {
+    try { validateImportedRules(mergedImportRules); } catch (error) { importMergeError = String(error); }
+  }
+  function applyReliabilityImport() {
+    if (!mergedImportRules || !selectedImportFields.length || importMergeError || !rulesReady || rulesConflict || rulesSaving) return;
+    if (!window.confirm(`Apply ${selectedImportFields.length} selected threshold field(s) to the editor? Shared settings will not change until saved.`)) return;
+    editReliabilityRules(() => ({ ...mergedImportRules })); setImportedRules(null); setImportFileName(""); setSelectedImportFields([]);
+    setRuleNote(previous => previous || "Selective restoration from threshold backup");
+  }
+  async function reloadReliabilityRules() {
+    try {
+      const response = await requestNode("/api/captures/reliability-rules");
+      setReliabilityRules(response.rules); setRulesVersion(response.version);
+      rulesDirtyRef.current = false; setRulesDirty(false); setRulesConflict(false); setRulesError(null);
+    } catch (error) { setRulesError(String(error)); }
+  }
+  const recoveryStatistics = useMemo(() => {
+    const durationMs = statisticsWindow === "24h" ? 86400000 : statisticsWindow === "7d" ? 604800000 : 2592000000;
+    const cutoff = Date.now() - durationMs;
+    const windowEntries = audit.filter(entry => Number.isFinite(Date.parse(entry.at)) && Date.parse(entry.at) >= cutoff && Date.parse(entry.at) <= Date.now());
+    const count = (type: RecoveryAuditEntry["type"]) => windowEntries.filter(entry => entry.type === type).length;
+    const successes = count("success");
+    const failures = count("failure");
+    const cameras = new Map<string, { cameraId: string; successes: number; failures: number }>();
+    for (const entry of windowEntries) {
+      if (entry.type !== "success" && entry.type !== "failure") continue;
+      const camera = cameras.get(entry.cameraId) ?? { cameraId: entry.cameraId, successes: 0, failures: 0 };
+      if (entry.type === "success") camera.successes++;
+      else camera.failures++;
+      cameras.set(entry.cameraId, camera);
+    }
+    const daily = new Map<string, { day: string; successes: number; failures: number }>();
+    for (const entry of windowEntries) {
+      if (entry.type !== "success" && entry.type !== "failure") continue;
+      const day = new Date(entry.at).toLocaleDateString("en-CA");
+      const bucket = daily.get(day) ?? { day, successes: 0, failures: 0 };
+      if (entry.type === "success") bucket.successes++;
+      else bucket.failures++;
+      daily.set(day, bucket);
+    }
+    return { successes, failures, acknowledged: count("acknowledged"), resolved: count("resolved"), reopened: count("reopened"),
+      cameras: [...cameras.values()].sort((a, b) => b.failures - a.failures || a.cameraId.localeCompare(b.cameraId)),
+      daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)),
+      successRate: successes + failures ? Math.round(successes * 1000 / (successes + failures)) / 10 : null };
+  }, [audit, statisticsWindow]);
+  const reliabilityWarnings = useMemo(() => {
+    return recoveryStatistics.cameras.flatMap(camera => {
+      const attempts = camera.successes + camera.failures;
+      if (attempts < reliabilityRules.minAttempts) return [];
+      const rate = camera.successes * 100 / attempts;
+      const critical = camera.failures >= reliabilityRules.criticalFailures || rate < reliabilityRules.criticalSuccessRate;
+      const warning = camera.failures >= reliabilityRules.warningFailures || rate < reliabilityRules.warningSuccessRate;
+      if (!critical && !warning) return [];
+      return [{ cameraId: camera.cameraId, severity: critical ? "Critical" : "Warning", attempts, failures: camera.failures, rate: Math.round(rate) }];
+    }).sort((a, b) => (a.severity === "Critical" ? 0 : 1) - (b.severity === "Critical" ? 0 : 1) || b.failures - a.failures);
+  }, [recoveryStatistics, reliabilityRules]);
+  // Browser-local transition history. A new audit attempt (or a changed threshold/window)
+  // is required before recording another snapshot; the 10-second poll alone adds nothing.
+  type ReliabilityHistoryItem = { at: string; cameraId: string; from: string; to: string; attempts: number; failures: number; rate: number; reason: string };
+  const [reliabilityHistory, setReliabilityHistory] = useState<ReliabilityHistoryItem[]>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem("tournament-recovery-warning-history:v1") || "[]");
+      return Array.isArray(saved) ? saved.filter((item): item is ReliabilityHistoryItem => !!item && typeof item.cameraId === "string" && typeof item.at === "string" && typeof item.to === "string" && typeof item.from === "string").slice(0, 250) : [];
+    } catch { return []; }
+  });
+  const [sharedWarningsReady, setSharedWarningsReady] = useState(false);
+  const reliabilityFingerprint = useMemo(() => JSON.stringify({
+    window: statisticsWindow, rules: reliabilityRules,
+    attempts: audit.filter(entry => entry.type === "failure" || entry.type === "success")
+      .map(entry => `${entry.at}|${entry.cameraId}|${entry.type}`).sort()
+  }), [audit, statisticsWindow, reliabilityRules]);
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const response = await requestNode("/api/captures/reliability-warnings");
+        if (!active) return;
+        const entries = Array.isArray(response.events) ? response.events : [];
+        setReliabilityHistory(entries.map((e: any) => ({ at: e.at, cameraId: e.cameraId, from: e.from, to: e.to, attempts: e.attempts, failures: e.failures, rate: e.rate, reason: e.reason })));
+        setReliabilityReviews(Object.fromEntries(entries.filter((e: any) => e.acknowledgedAt).map((e: any) => [e.key, { acknowledgedAt: e.acknowledgedAt, note: e.note }] )));
+        setSharedWarningsReady(true);
+      } catch { if (active) setSharedWarningsReady(false); }
+    };
+    void refresh(); const timer = window.setInterval(() => { void refresh(); }, 10000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [requestNode]);
+  const reliabilityPrevious = useRef<{ fingerprint: string; states: Record<string, string> } | null>(null);
+  useEffect(() => {
+    if (!audit.length) return;
+    const current: Record<string, string> = {};
+    for (const camera of recoveryStatistics.cameras) current[camera.cameraId] = "Normal";
+    for (const warning of reliabilityWarnings) current[warning.cameraId] = warning.severity;
+    const previous = reliabilityPrevious.current;
+    if (previous?.fingerprint === reliabilityFingerprint) return;
+    reliabilityPrevious.current = { fingerprint: reliabilityFingerprint, states: current };
+    // The first observation establishes a baseline rather than inventing a transition.
+    if (!previous) return;
+    const changes: ReliabilityHistoryItem[] = [];
+    for (const cameraId of new Set([...Object.keys(previous.states), ...Object.keys(current)])) {
+      const from = previous.states[cameraId] ?? "Normal";
+      const to = current[cameraId] ?? "Normal";
+      if (from === to) continue;
+      const warning = reliabilityWarnings.find(item => item.cameraId === cameraId);
+      changes.push({ at: new Date().toISOString(), cameraId, from, to,
+        attempts: warning?.attempts ?? 0, failures: warning?.failures ?? 0, rate: warning?.rate ?? 0,
+        reason: to === "Normal" ? "Returned below warning thresholds or left reporting window" :
+          to === "Critical" && from === "Warning" ? "Escalated from warning to critical" : "Threshold state changed" });
+    }
+    if (changes.length && sharedWarningsReady) {
+      void Promise.all(changes.map(change => requestNode("/api/captures/reliability-warnings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(change) })))
+        .then(() => requestNode("/api/captures/reliability-warnings"))
+        .then(response => { setReliabilityHistory((response.events ?? []).map((e: any) => ({ at: e.at, cameraId: e.cameraId, from: e.from, to: e.to, attempts: e.attempts, failures: e.failures, rate: e.rate, reason: e.reason }))); })
+        .catch(error => setError(String(error)));
+    }
+  }, [reliabilityFingerprint, reliabilityWarnings, recoveryStatistics.cameras, audit.length, sharedWarningsReady]);
+  useEffect(() => {
+    try { localStorage.setItem("tournament-recovery-warning-history:v1", JSON.stringify(reliabilityHistory)); }
+    catch { /* storage unavailable */ }
+  }, [reliabilityHistory]);
+  // Step 127: browser-local operator reviews, keyed to immutable warning transition identity.
+  type ReliabilityReview = { acknowledgedAt: string; note: string };
+  const [reliabilityReviews, setReliabilityReviews] = useState<Record<string, ReliabilityReview>>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem("tournament-recovery-warning-reviews:v1") || "{}");
+      if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+      return Object.fromEntries(Object.entries(saved).filter(([, value]) => {
+        const review = value as Partial<ReliabilityReview> | null;
+        return review && typeof review.acknowledgedAt === "string" && typeof review.note === "string";
+      })) as Record<string, ReliabilityReview>;
+    } catch { return {}; }
+  });
+  const reliabilityReviewKey = (item: ReliabilityHistoryItem) => JSON.stringify([item.at, item.cameraId, item.from, item.to]);
+  useEffect(() => {
+    try { localStorage.setItem("tournament-recovery-warning-reviews:v1", JSON.stringify(reliabilityReviews)); }
+    catch { /* storage unavailable */ }
+  }, [reliabilityReviews]);
+  const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [historyReviewFilter, setHistoryReviewFilter] = useState("all");
+  async function acknowledgeReliabilityWarning(item: ReliabilityHistoryItem) {
+    const key = reliabilityReviewKey(item);
+    if (reliabilityReviews[key]) return;
+    const note = (reviewNotes[key] || "").trim();
+    if (!note || note.length > 1000) return;
+    try {
+      const response = await requestNode("/api/captures/reliability-warnings/acknowledge", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, note }) });
+      setReliabilityReviews(previous => ({ ...previous, [key]: { acknowledgedAt: response.event.acknowledgedAt, note: response.event.note } }));
+      setReviewNotes(previous => { const next = { ...previous }; delete next[key]; return next; });
+    } catch (error) { setError(String(error)); }
+  }
+  const [historyFilter, setHistoryFilter] = useState("all");
+  const visibleReliabilityHistory = reliabilityHistory.filter(item => (historyFilter === "all" || item.to === historyFilter) && (historyReviewFilter === "all" || (historyReviewFilter === "reviewed" ? !!reliabilityReviews[reliabilityReviewKey(item)] : !reliabilityReviews[reliabilityReviewKey(item)])));
+  function exportReliabilityHistory() {
+    const csvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+    const rows = [["Timestamp", "Camera", "Previous state", "New state", "Attempts", "Failures", "Success rate (%)", "Reason", "Acknowledged at", "Operator note"],
+      ...visibleReliabilityHistory.map(item => [item.at, item.cameraId, item.from, item.to, item.attempts, item.failures, item.rate, item.reason, reliabilityReviews[reliabilityReviewKey(item)]?.acknowledgedAt ?? "", reliabilityReviews[reliabilityReviewKey(item)]?.note ?? ""])];
+    const blob = new Blob(["\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a"); link.href = url; link.download = `recovery-reliability-warnings-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const filteredAudit = audit.filter(entry => {
+    const search = auditSearch.trim().toLowerCase();
+    const timestamp = Date.parse(entry.at);
+    return (auditType === "all" || entry.type === auditType) &&
+      (!search || `${entry.cameraId} ${entry.type} ${entry.detail}`.toLowerCase().includes(search)) &&
+      (!auditFrom || (Number.isFinite(timestamp) && timestamp >= new Date(`${auditFrom}T00:00:00`).getTime())) &&
+      (!auditTo || (Number.isFinite(timestamp) && timestamp <= new Date(`${auditTo}T23:59:59.999`).getTime()));
+  });
+  function exportAuditCsv() {
+    const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const rows = [["Timestamp", "Camera ID", "Event Type", "Detail"],
+      ...filteredAudit.map(entry => [entry.at, entry.cameraId, entry.type, entry.detail])];
+    const csv = "\uFEFF" + rows.map(row => row.map(escapeCsv).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `capture-recovery-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const [escalations, setEscalations] = useState<RecoveryEscalationResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+  const refresh = async () => {
+    try {
+      const [nextStatus, nextEvents, nextPolicy, nextEscalations, nextAudit] = await Promise.all([
+        requestNode("/api/captures/recovery-status"),
+        requestNode("/api/captures/recovery-events"),
+        requestNode("/api/captures/recovery-policy"), requestNode("/api/captures/recovery-escalations"), requestNode("/api/captures/recovery-audit")
+      ]);
+      setStatus(nextStatus); setEvents(nextEvents.events ?? []); setPolicy(nextPolicy); setEscalations(nextEscalations); setAudit(nextAudit.events ?? []);
+      setError(null); setLastUpdate(new Date().toLocaleTimeString());
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const [s, e, p, x, auditResponse] = await Promise.all([
+          requestNode("/api/captures/recovery-status"), requestNode("/api/captures/recovery-events"), requestNode("/api/captures/recovery-policy"), requestNode("/api/captures/recovery-escalations"), requestNode("/api/captures/recovery-audit")
+        ]);
+        if (alive) { setStatus(s); setEvents(e.events ?? []); setPolicy(p); setEscalations(x); setAudit(auditResponse.events ?? []); setError(null); setLastUpdate(new Date().toLocaleTimeString()); }
+      } catch (cause) { if (alive) setError(String(cause)); }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 10000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [requestNode]);
+  async function restart(camera: RecoveryCameraStatus) {
+    if (!window.confirm(`Restart capture for ${camera.cameraId}? This stops capture and starts a new recording segment. Active YouTube streams are protected.`)) return;
+    setBusy(camera.cameraId);
+    try {
+      await requestNode(`/api/captures/${encodeURIComponent(camera.cameraId)}/recover`, { method: "POST" });
+      await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(null); }
+  }
+  async function resolveIncident(cameraId: string) {
+    const note = window.prompt(`Resolution note for ${cameraId} (required):`);
+    if (!note?.trim()) return;
+    setBusy(`resolve:${cameraId}`);
+    try {
+      await requestNode(`/api/captures/recovery-incidents/${encodeURIComponent(cameraId)}/resolve`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note: note.trim() })
+      });
+      await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(null); }
+  }
+  async function acknowledgeFailures(keys: string[]) {
+    if (!keys.length) return;
+    setBusy("acknowledge");
+    try {
+      await requestNode("/api/captures/recovery-events/acknowledge", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys })
+      });
+      await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(null); }
+  }
+  async function updatePolicy() {
+    if (!policy || savingPolicy) return;
+    if (policy.enabled && !window.confirm("Enable unattended camera capture restarts? Recording segments may split. Active YouTube streams remain protected.")) return;
+    setSavingPolicy(true);
+    try {
+      const saved = await requestNode("/api/captures/recovery-policy", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(policy)
+      });
+      setPolicy(saved);
+      await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSavingPolicy(false); }
+  }
+  return <section className="overview" aria-label="Capture recovery controls">
+    <h2>Capture Recovery</h2>
+    <p className="muted">Manual restarts are restricted by stream protection, cooldowns, and attempt limits. Automatic recovery is {status?.automaticEnabled ? "enabled" : "disabled"}.</p>
+    <details className="compact-collapsible"><summary>Automatic recovery policy</summary>
+      {policy && <div className="bulk-results">
+        <label><input type="checkbox" checked={policy.enabled} onChange={e => setPolicy({ ...policy, enabled: e.target.checked })} /> Enable unattended recovery</label>
+        <label>Consecutive unhealthy checks <input type="number" min={3} max={12} value={policy.unhealthyChecks} onChange={e => setPolicy({ ...policy, unhealthyChecks: Number(e.target.value) })} /></label>
+        <label>Minimum capture age (seconds) <input type="number" min={30} max={600} value={policy.minimumCaptureAgeSeconds} onChange={e => setPolicy({ ...policy, minimumCaptureAgeSeconds: Number(e.target.value) })} /></label>
+        <p className="muted">YouTube streams are always protected. Recovery remains limited to two attempts per hour per camera with a five-minute cooldown.</p>
+        <button type="button" disabled={savingPolicy} onClick={() => void updatePolicy()}>{savingPolicy ? "Saving..." : "Save recovery policy"}</button>
+      </div>}
+    </details>
+    <button type="button" onClick={() => void refresh()}>Refresh recovery status</button>
+    {lastUpdate && <span className="muted"> Updated: {lastUpdate}</span>}
+    {error && <p role="alert">{error}</p>}
+    {status?.cameras.length === 0 && <p>No active captures.</p>}
+    {status?.cameras.map(camera => <div className="bulk-results" key={camera.cameraId}>
+      <p><strong>{camera.cameraId}</strong></p>
+      <p>Status: {camera.restarting ? "Restarting" : camera.streaming ? "Streaming (protected)" : camera.allowed ? "Eligible for restart" : camera.reason || "Unavailable"}</p>
+      <p>Recovery attempts (last hour): {camera.attemptsInLastHour} / {status.maxAttemptsPerHour} | Cooldown: {Math.ceil(camera.cooldownRemainingMs / 1000)}s | Recording: {camera.recordingEnabled ? "On" : "Off"}</p>
+      {camera.lastResult && <p>{camera.lastResult}</p>}
+      <button type="button" disabled={!camera.allowed || busy !== null} onClick={() => void restart(camera)}>{busy === camera.cameraId ? "Restarting..." : "Restart capture"}</button>
+    </div>)}
+    <details className="compact-collapsible"><summary>Repeated-failure escalation ({escalations?.escalations.filter(item => item.incidentStatus === "open").length ?? 0} open)</summary>
+      <p className="muted">A critical escalation appears after {escalations?.threshold ?? 3} failed recovery attempts for one camera within {escalations?.windowMinutes ?? 60} minutes. This is monitoring only and never bypasses stream protection or restart limits.</p>
+      {escalations?.escalations.map(item => <div className="bulk-results" key={item.cameraId} role="alert">
+        <p><strong>{item.incidentStatus === "resolved" ? "Resolved" : "Critical"}: {item.cameraId}</strong> | {item.failuresInWindow} failures in the last hour</p>
+        <p>First: {new Date(item.firstFailureAt).toLocaleString()} | Latest: {new Date(item.lastFailureAt).toLocaleString()} | Unacknowledged: {item.unacknowledgedFailures}</p>
+        <p>{item.latestDetail}</p>
+        {item.incidentStatus === "resolved" ? <p className="muted">Resolved {item.resolvedAt ? new Date(item.resolvedAt).toLocaleString() : ""}: {item.resolutionNote}. A new failure will reopen this incident.</p> :
+          <button type="button" disabled={busy !== null} onClick={() => void resolveIncident(item.cameraId)}>{busy === `resolve:${item.cameraId}` ? "Resolving..." : "Resolve incident"}</button>}
+      </div>)}
+      {escalations && escalations.escalations.length === 0 && <p>No cameras currently meet the escalation threshold.</p>}
+    </details>
+    <details className="compact-collapsible"><summary>Operator notifications ({events.filter(e => e.outcome === "failure" && !e.acknowledgedAt).length} unacknowledged)</summary>
+      <p className="muted">Acknowledgement marks a failed restart as reviewed. It does not restart cameras or change recovery safeguards.</p>
+      {events.some(e => e.outcome === "failure" && !e.acknowledgedAt) && <button type="button" disabled={busy !== null} onClick={() => void acknowledgeFailures(events.filter(e => e.outcome === "failure" && !e.acknowledgedAt).map(recoveryEventKey))}>Acknowledge all failures</button>}
+      {events.filter(e => e.outcome === "failure").slice(0, 25).map((event, i) => <div className="bulk-results" key={`${recoveryEventKey(event)}-${i}`}>
+        <p>{new Date(event.at).toLocaleString()}: {event.cameraId}: {event.detail}</p>
+        {event.acknowledgedAt ? <p className="muted">Acknowledged {new Date(event.acknowledgedAt).toLocaleString()}</p> :
+          <button type="button" disabled={busy !== null} onClick={() => void acknowledgeFailures([recoveryEventKey(event)])}>Acknowledge</button>}
+      </div>)}
+      {!events.some(e => e.outcome === "failure") && <p>No recovery failures recorded.</p>}
+    </details>
+    <details className="compact-collapsible"><summary>Recovery incident statistics and reliability trends</summary>
+      <p className="muted">Statistics use retained audit records only (up to 2,000 events), not continuous camera uptime. Success rate measures recovery attempts, not stream availability. Older records may have been pruned.</p>
+      <label>Reporting period <select value={statisticsWindow} onChange={e => setStatisticsWindow(e.target.value as "24h" | "7d" | "30d")}>
+        <option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
+      </select></label>
+      <div className="bulk-results">
+        <p><strong>Recovery attempts:</strong> {recoveryStatistics.successes + recoveryStatistics.failures} | <strong>Successful:</strong> {recoveryStatistics.successes} | <strong>Failed:</strong> {recoveryStatistics.failures}</p>
+        <p><strong>Attempt success rate:</strong> {recoveryStatistics.successRate === null ? "N/A (no attempts)" : `${recoveryStatistics.successRate}%`}</p>
+        <p><strong>Acknowledgements:</strong> {recoveryStatistics.acknowledged} | <strong>Resolutions:</strong> {recoveryStatistics.resolved} | <strong>Reopenings:</strong> {recoveryStatistics.reopened}</p>
+      </div>
+      <details className="compact-collapsible"><summary>Proactive reliability warnings ({reliabilityWarnings.length})</summary>
+        <p className="muted">Warnings use retained recovery-attempt audit events in the selected reporting period. They are informational and never trigger camera restarts. Thresholds are shared through the backend. Save changes to synchronize dashboards.</p>
+        <div className="bulk-results">
+          <label>Minimum attempts before evaluation <input type="number" min={1} max={100} value={reliabilityRules.minAttempts} onChange={e => editReliabilityRules(r => ({ ...r, minAttempts: Math.max(1, Math.min(100, Number(e.target.value) || 1)) }))} /></label>
+          <label>Warning below success rate (%) <input type="number" min={0} max={100} value={reliabilityRules.warningSuccessRate} onChange={e => editReliabilityRules(r => ({ ...r, warningSuccessRate: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} /></label>
+          <label>Critical below success rate (%) <input type="number" min={0} max={100} value={reliabilityRules.criticalSuccessRate} onChange={e => editReliabilityRules(r => ({ ...r, criticalSuccessRate: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} /></label>
+          <label>Warning at failed attempts <input type="number" min={1} max={100} value={reliabilityRules.warningFailures} onChange={e => editReliabilityRules(r => ({ ...r, warningFailures: Math.max(1, Math.min(100, Number(e.target.value) || 1)) }))} /></label>
+          <label>Critical at failed attempts <input type="number" min={1} max={100} value={reliabilityRules.criticalFailures} onChange={e => editReliabilityRules(r => ({ ...r, criticalFailures: Math.max(1, Math.min(100, Number(e.target.value) || 1)) }))} /></label>
+        </div>
+        <label>Change reason (optional) <input type="text" maxLength={300} value={ruleNote} onChange={e => setRuleNote(e.target.value)} placeholder="Reason for threshold change" /></label>
+        <button type="button" disabled={!rulesDirty || rulesSaving || !rulesReady || rulesConflict || rulesVersion === null} onClick={() => void saveReliabilityRules()}>{rulesSaving ? "Saving..." : "Save shared thresholds"}</button>
+        <p className="muted">Shared configuration version: {rulesVersion ?? "loading"}</p>
+        {rulesConflict && <p role="alert">Another dashboard changed these thresholds. Reload shared settings to resolve the conflict. Your unsaved draft will be discarded.</p>}
+        <button type="button" onClick={() => void reloadReliabilityRules()} disabled={rulesSaving}>Reload shared thresholds</button>
+        {rulesDirty && <p className="muted">Unsaved changes are visible only here until saved.</p>}
+        {rulesError && <p role="alert">Threshold sync: {rulesError}</p>}
+        {!rulesReady && <p className="muted">Loading shared thresholds...</p>}
+        <details className="compact-collapsible"><summary>Threshold backup and import/export</summary>
+          <p className="muted">Export the current editor values with a SHA-256 integrity checksum. Imports verify schema 2 checksums; legacy schema 1 backups are accepted but unverified. A checksum does not prove the backup is trusted. Importing previews and validates a backup without modifying shared settings. Apply to the editor, then save using the current configuration version.</p>
+          <button type="button" disabled={!rulesReady || rulesVersion === null} onClick={() => void exportReliabilityRules()}>Export threshold JSON</button>
+          <label>Import threshold JSON <input type="file" accept=".json,application/json" onChange={e => void previewReliabilityImport(e.target.files?.[0])} /></label>
+          <details className="compact-collapsible"><summary>Backup validation diagnostics ({importDiagnostics.length})</summary>
+            <p className="muted">Steps 136-138: View validation checkpoints, failure reasons and recent import attempts. This browser retains the latest 50 attempts, including file names. No file contents are stored. History is local to this browser and is not an authenticated audit trail.</p>
+            <p className="muted">Operator review tools: pinned records and selection are local to this browser. Pins are bookmarks, not immutable audit records.</p>
+            <label><input type="checkbox" checked={diagnosticPinnedOnly} onChange={e => { setDiagnosticPinnedOnly(e.target.checked); setDiagnosticPage(1); }} /> Pinned only</label>
+            <label>Group summary <select value={diagnosticGroupBy} onChange={e => setDiagnosticGroupBy(e.target.value as "none" | "outcome" | "filename")}><option value="none">All records</option><option value="outcome">By outcome</option><option value="filename">By filename</option></select></label>
+            {diagnosticGroupBy !== "none" && <div className="bulk-results">{Object.entries(diagnosticGroups).sort((a, b) => b[1] - a[1]).map(([group, count]) => <p key={group}>{group}: {count}</p>)}</div>}
+            <p className="muted">Selected: {selectedImportDiagnostics.length} | Pinned: {importDiagnostics.filter(item => diagnosticPinned.includes(diagnosticKey(item))).length}</p>
+            <p className="muted">Selected matching filters: {diagnosticSelectedMatching} | Selected rejected: {diagnosticSelectedRejected} | Selected pinned: {diagnosticSelectedPinned}</p>
+            <details className="compact-collapsible"><summary>Operator triage and priority</summary>
+              <p className="muted">Browser-local review labels only. These do not resolve backend incidents or change stream health.</p>
+              <label>Status filter <select value={diagnosticTriageStatusFilter} onChange={e => { setDiagnosticTriageStatusFilter(e.target.value); setDiagnosticPage(1); }}><option value="all">All statuses</option><option value="new">New</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option></select></label>
+              <label>Priority filter <select value={diagnosticTriagePriorityFilter} onChange={e => { setDiagnosticTriagePriorityFilter(e.target.value); setDiagnosticPage(1); }}><option value="all">All priorities</option><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></select></label>
+              <p className="muted">Matching triage: New {diagnosticTriageCounts["status:new"] || 0} | Investigating {diagnosticTriageCounts["status:investigating"] || 0} | Resolved {diagnosticTriageCounts["status:resolved"] || 0} | High priority {diagnosticTriageCounts["priority:high"] || 0}</p>
+              <label><input type="checkbox" checked={diagnosticTriageOnlyOpen} onChange={e => { setDiagnosticTriageOnlyOpen(e.target.checked); setDiagnosticPage(1); }} /> Open reviews only (204)</label>
+              <label><input type="checkbox" checked={diagnosticTriageOnlyHigh} onChange={e => { setDiagnosticTriageOnlyHigh(e.target.checked); setDiagnosticPage(1); }} /> High-priority reviews only (205)</label>
+              <button type="button" onClick={() => selectDiagnosticTriageMatches(t => t.status === "new")}>Select new reviews (206)</button>{" "}
+              <button type="button" onClick={() => selectDiagnosticTriageMatches(t => t.status === "investigating")}>Select investigating (207)</button>{" "}
+              <button type="button" onClick={() => selectDiagnosticTriageMatches(t => t.priority === "high")}>Select high priority (208)</button>{" "}
+              <button type="button" onClick={() => { setDiagnosticTriageOnlyOpen(true); setDiagnosticTriageOnlyHigh(true); setDiagnosticPage(1); }}>Focus open high-priority (209)</button>{" "}
+              <button type="button" onClick={() => { setDiagnosticTriageOnlyOpen(false); setDiagnosticTriageOnlyHigh(false); setDiagnosticTriageStatusFilter("all"); setDiagnosticTriagePriorityFilter("all"); setDiagnosticPage(1); }}>Reset triage filters (210)</button>
+              <label>Review export limit (211) <select value={diagnosticTriageReportLimit} onChange={e => setDiagnosticTriageReportLimit(Number(e.target.value))}><option value={10}>10 records</option><option value={25}>25 records</option><option value={50}>50 records</option></select></label>
+              <label><input type="checkbox" checked={diagnosticTriageReportIncludeNotes} onChange={e => setDiagnosticTriageReportIncludeNotes(e.target.checked)} /> Include operator notes in review exports (212)</label>
+              <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportDiagnosticTriageCsv}>Export review CSV (213)</button>{" "}
+              <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportDiagnosticTriageReviewJson}>Export review JSON</button>
+              <details className="compact-collapsible"><summary>Review queue and aging (214-223)</summary>
+                <p className="muted">Review aging uses the import timestamp, not the time a triage label was changed. All data remains browser-local.</p>
+                <label>Minimum record age (214) <select value={diagnosticReviewAgeDays} onChange={e => { setDiagnosticReviewAgeDays(Number(e.target.value)); setDiagnosticPage(1); }}><option value={0}>Any age</option><option value={1}>1+ days</option><option value={7}>7+ days</option><option value={30}>30+ days</option></select></label>
+                <label><input type="checkbox" checked={diagnosticReviewRejectedOnly} onChange={e => { setDiagnosticReviewRejectedOnly(e.target.checked); setDiagnosticPage(1); }} /> Rejected imports only (215)</label>
+                <label><input type="checkbox" checked={diagnosticReviewMissingNotes} onChange={e => { setDiagnosticReviewMissingNotes(e.target.checked); setDiagnosticPage(1); }} /> Without operator notes (216)</label>
+                <label>Review order (217) <select value={diagnosticReviewSort} onChange={e => { setDiagnosticReviewSort(e.target.value as "chronological" | "priority"); setDiagnosticPage(1); }}><option value="chronological">Existing chronological order</option><option value="priority">High priority first, newest within priority</option></select></label>
+                <label><input type="checkbox" checked={diagnosticReviewShowSummary} onChange={e => setDiagnosticReviewShowSummary(e.target.checked)} /> Show queue summary (218)</label>
+                {diagnosticReviewShowSummary && <p className="muted">Open reviews: {diagnosticReviewOpenCount} (219) | Without notes: {diagnosticReviewUnnotedCount} (220) | Oldest matching import: {diagnosticReviewOldest === null ? "None" : new Date(diagnosticReviewOldest).toLocaleString()} (221)</p>}
+                <details className="compact-collapsible"><summary>Review ownership and overdue queue (224-233)</summary>
+                  <label>Review overdue after (224) <select value={diagnosticReviewSlaDays} onChange={e => { setDiagnosticReviewSlaDays(Number(e.target.value)); setDiagnosticPage(1); }}><option value={1}>1 day</option><option value={3}>3 days</option><option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option></select></label>
+                  <label><input type="checkbox" checked={diagnosticReviewOverdueOnly} onChange={e => { setDiagnosticReviewOverdueOnly(e.target.checked); setDiagnosticPage(1); }} /> Overdue open reviews only (225)</label>
+                  <label><input type="checkbox" checked={diagnosticReviewUnassignedOnly} onChange={e => { setDiagnosticReviewUnassignedOnly(e.target.checked); setDiagnosticPage(1); }} /> Unassigned reviews only (226)</label>
+                  <label>Owner name filter (227) <input type="search" value={diagnosticReviewOwnerFilter} onChange={e => { setDiagnosticReviewOwnerFilter(e.target.value); setDiagnosticPage(1); }} placeholder="Search owner" /></label>
+                  <p className="muted">Matching overdue open reviews: {diagnosticReviewOverdueCount} (228) | Unassigned: {diagnosticReviewUnassignedCount} (229). Overdue age is measured from import time.</p>
+                  <label>Assign selected to (230) <input type="text" maxLength={80} value={diagnosticReviewBulkOwner} onChange={e => setDiagnosticReviewBulkOwner(e.target.value)} placeholder="Operator name" /></label>
+                  <button type="button" disabled={!selectedImportDiagnostics.length || !diagnosticReviewBulkOwner.trim()} onClick={() => updateDiagnosticOwners(selectedImportDiagnostics.map(diagnosticKey), diagnosticReviewBulkOwner)}>Assign selected</button>{" "}
+                  <button type="button" disabled={!selectedImportDiagnostics.some(item => diagnosticReviewOwners[diagnosticKey(item)])} onClick={() => { if (window.confirm("Clear owners on selected records?")) updateDiagnosticOwners(selectedImportDiagnostics.map(diagnosticKey), ""); }}>Clear selected owners (231)</button>{" "}
+                  <button type="button" onClick={resetDiagnosticOwnershipFilters}>Reset ownership filters (232)</button>{" "}
+                  <button type="button" disabled={!diagnosticReviewOverdueCount} onClick={exportDiagnosticOverdueQueue}>Export overdue JSON (233)</button>{" "}
+                  <button type="button" onClick={cleanupDiagnosticOwners}>Clean orphaned owners</button>
+                  <details className="compact-collapsible"><summary>Owner workload and handoff (234-243)</summary>
+                    <label><input type="checkbox" checked={diagnosticOwnerOnlyOpen} onChange={e => { setDiagnosticOwnerOnlyOpen(e.target.checked); setDiagnosticPage(1); }} /> Open reviews only (234)</label>
+                    <label><input type="checkbox" checked={diagnosticOwnerOnlyHigh} onChange={e => { setDiagnosticOwnerOnlyHigh(e.target.checked); setDiagnosticPage(1); }} /> High-priority only (235)</label>
+                    <label><input type="checkbox" checked={diagnosticOwnerOnlyUnnoted} onChange={e => { setDiagnosticOwnerOnlyUnnoted(e.target.checked); setDiagnosticPage(1); }} /> Missing notes only (236)</label>
+                    <label>Owner sort (237) <select value={diagnosticOwnerSort} onChange={e => { setDiagnosticOwnerSort(e.target.value as "existing" | "owner"); setDiagnosticPage(1); }}><option value="existing">Existing order</option><option value="owner">Owner A-Z, unassigned last</option></select></label>
+                    <button type="button" onClick={() => selectOwnerReviewMatches("assigned")}>Select assigned (238)</button>{" "}
+                    <button type="button" onClick={() => selectOwnerReviewMatches("unassigned")}>Select unassigned (239)</button>{" "}
+                    <button type="button" onClick={() => selectOwnerReviewMatches("overdue")}>Select overdue (240)</button>
+                    <p className="muted">Workload by owner (241). Counts reflect current filters; overdue uses the selected review age threshold.</p>
+                    {Object.entries(diagnosticOwnerWorkload).sort(([a], [b]) => a.localeCompare(b)).map(([owner, counts]) => <p key={owner} className="muted"><strong>{owner}</strong>: {counts.total} total, {counts.open} open, {counts.overdue} overdue, {counts.high} high priority</p>)}
+                    <label>Handoff note (242) <input type="text" maxLength={500} value={diagnosticOwnerHandoffNote} onChange={e => setDiagnosticOwnerHandoffNote(e.target.value)} placeholder="Optional note for selected reviews" /></label>
+                    <button type="button" disabled={!selectedImportDiagnostics.length || !diagnosticReviewBulkOwner.trim()} onClick={handoffSelectedDiagnosticReviews}>Assign selected and add handoff note (242)</button>{" "}
+                    <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportDiagnosticOwnerWorkload}>Export owner workload JSON (243)</button>{" "}
+                    <button type="button" onClick={() => { setDiagnosticOwnerOnlyOpen(false); setDiagnosticOwnerOnlyHigh(false); setDiagnosticOwnerOnlyUnnoted(false); setDiagnosticOwnerSort("existing"); setDiagnosticPage(1); }}>Reset workload filters</button>
+                  </details>
+                  <details className="compact-collapsible"><summary>Review focus and workload snapshots (244-253)</summary>
+                    <p className="muted">Focus on a small review queue without changing the underlying records. All controls are browser-local.</p>
+                    <label>Owner contains (244) <input type="text" maxLength={80} value={reviewFocusOwner} onChange={e => setReviewFocusOwner(e.target.value)} placeholder="Operator name" /></label>
+                    <label>Priority (245) <select value={reviewFocusPriority} onChange={e => setReviewFocusPriority(e.target.value as typeof reviewFocusPriority)}><option value="all">All</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label>
+                    <label>Status (246) <select value={reviewFocusStatus} onChange={e => setReviewFocusStatus(e.target.value as typeof reviewFocusStatus)}><option value="all">All</option><option value="new">New</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option></select></label>
+                    <label><input type="checkbox" checked={reviewFocusOnlyOverdue} onChange={e => setReviewFocusOnlyOverdue(e.target.checked)} /> Overdue open reviews only (247)</label>
+                    <label><input type="checkbox" checked={reviewFocusOnlyUnassigned} onChange={e => setReviewFocusOnlyUnassigned(e.target.checked)} /> Unassigned reviews only (248)</label>
+                    <label>Queue sort (249) <select value={reviewFocusSort} onChange={e => setReviewFocusSort(e.target.value as typeof reviewFocusSort)}><option value="age">Oldest first</option><option value="priority">High priority, then oldest</option></select></label>
+                    <label>Snapshot limit (250) <select value={reviewFocusLimit} onChange={e => setReviewFocusLimit(Number(e.target.value))}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label>
+                    <p className="muted">Matching reviews (251): {reviewFocusRows.length} total, {reviewFocusOpen} open, {reviewFocusHigh} high priority, {reviewFocusUnassigned} unassigned.</p>
+                    <button type="button" disabled={!reviewFocusRows.length} onClick={() => { setDiagnosticSelected(previous => Array.from(new Set([...previous, ...reviewFocusRows.slice(0, reviewFocusLimit).map(diagnosticKey)]))); setDiagnosticBulkNotice(`Selected up to ${reviewFocusLimit} focused reviews.`); }}>Select focused reviews (252)</button>{" "}
+                    <label><input type="checkbox" checked={reviewFocusIncludeNotes} onChange={e => setReviewFocusIncludeNotes(e.target.checked)} /> Include operator notes in snapshot</label>
+                    <button type="button" disabled={!reviewFocusRows.length} onClick={exportReviewFocusSnapshot}>Export focused JSON (253)</button>{" "}
+                    <button type="button" onClick={resetReviewFocus}>Reset focus</button>
+                    <details className="compact-collapsible"><summary>Saved review filter presets (254-263)</summary>
+                      <p className="muted">Presets save filter settings in this browser only. They never change reviews or backend configuration.</p>
+                      <label>Preset name (254) <input type="text" maxLength={60} value={reviewPresetName} onChange={e => setReviewPresetName(e.target.value)} placeholder="e.g. Overdue high priority" /></label>
+                      <button type="button" onClick={saveReviewPreset}>Save current filters (255)</button>{" "}
+                      <label>Saved presets (256) <select value={reviewPresetSelected} onChange={e => setReviewPresetSelected(e.target.value)}><option value="">Choose preset</option>{reviewPresets.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>
+                      <button type="button" disabled={!reviewPresetSelected} onClick={applyReviewPreset}>Apply selected preset (257)</button>{" "}
+                      <button type="button" disabled={!reviewPresetSelected} onClick={renameReviewPreset}>Rename selected (258)</button>{" "}
+                      <button type="button" disabled={!reviewPresetSelected} onClick={deleteReviewPreset}>Delete selected (259)</button>
+                      <p className="muted">{reviewPresets.length}/20 saved presets (260). Names are unique without regard to case.</p>
+                      <button type="button" onClick={exportReviewPresets} disabled={!reviewPresets.length}>Export presets JSON (261)</button>{" "}
+                      <label>Import presets JSON (262) <input type="file" accept=".json,application/json" onChange={e => { void importReviewPresets(e.target.files?.[0]); e.target.value = ""; }} /></label>
+                      {reviewPresetMessage && <p role="status">{reviewPresetMessage} (263)</p>}
+                    </details>
+                  </details>
+                  <p className="muted">Ownership is stored only in this browser. It is not synchronized across dashboards.</p>
+                </details>
+                <button type="button" onClick={resetDiagnosticReviewQueue}>Reset review queue filters (222)</button>{" "}
+                <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportDiagnosticReviewSnapshot}>Export review snapshot JSON (223)</button>
+              </details>
+              <label>Bulk status <select value={diagnosticTriageBulkStatus} onChange={e => setDiagnosticTriageBulkStatus(e.target.value as DiagnosticTriage["status"])}><option value="new">New</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option></select></label>
+              <button type="button" disabled={!selectedImportDiagnostics.length} onClick={() => updateDiagnosticTriage(selectedImportDiagnostics.map(diagnosticKey), { status: diagnosticTriageBulkStatus })}>Set selected status</button>{" "}
+              <label>Bulk priority <select value={diagnosticTriageBulkPriority} onChange={e => setDiagnosticTriageBulkPriority(e.target.value as DiagnosticTriage["priority"])}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></select></label>
+              <button type="button" disabled={!selectedImportDiagnostics.length} onClick={() => updateDiagnosticTriage(selectedImportDiagnostics.map(diagnosticKey), { priority: diagnosticTriageBulkPriority })}>Set selected priority</button>{" "}
+              <button type="button" disabled={!selectedImportDiagnostics.length} onClick={() => { if (window.confirm(`Reset triage labels for ${selectedImportDiagnostics.length} selected records?`)) updateDiagnosticTriage(selectedImportDiagnostics.map(diagnosticKey), { status: "new", priority: "normal" }); }}>Reset selected triage</button>{" "}
+              <button type="button" onClick={cleanOrphanedDiagnosticTriage}>Clean orphaned triage</button>{" "}
+              <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportDiagnosticTriageRecords}>Export matching triage JSON</button>
+            </details>
+            <label><input type="checkbox" checked={diagnosticNotesOnly} onChange={e => { setDiagnosticNotesOnly(e.target.checked); setDiagnosticPage(1); }} /> Annotated records only</label>
+            <label>Search operator notes <input type="search" value={diagnosticNoteSearch} onChange={e => { setDiagnosticNoteSearch(e.target.value); setDiagnosticPage(1); }} placeholder="Search notes" /></label>
+            <label><input type="checkbox" checked={diagnosticIncludeNotesInExports} onChange={e => setDiagnosticIncludeNotesInExports(e.target.checked)} /> Include operator notes in record JSON/Markdown exports</label>
+            <p className="muted">Annotated matching records: {diagnosticAnnotatedCount} | Active days: {Object.keys(diagnosticDays).length} | Distinct rejection categories: {Object.keys(diagnosticErrorTypes).length}</p>
+            <button type="button" disabled={!diagnosticSelected.some(key => diagnosticNotes[key])} onClick={clearSelectedDiagnosticNotes}>Clear selected notes</button>{" "}
+            <button type="button" onClick={pruneOrphanedDiagnosticNotes}>Clean orphaned notes</button>{" "}
+            <button type="button" disabled={!diagnosticAnnotatedCount} onClick={exportDiagnosticNotes}>Export notes JSON</button>{" "}
+            <button type="button" onClick={exportDiagnosticTriageSummary}>Export triage summary JSON</button>
+            <label><input type="checkbox" checked={diagnosticRedactExports} onChange={e => setDiagnosticRedactExports(e.target.checked)} /> Redact filenames in record exports (CSV, JSON, Markdown)</label>
+            <p className="muted">Redaction applies to downloaded record files only. The on-screen history and summary grouping remain unchanged.</p>
+            {diagnosticBulkNotice && <p role="status" className="muted">{diagnosticBulkNotice}</p>}
+            <button type="button" disabled={!visibleImportDiagnostics.length} onClick={invertVisibleDiagnosticSelection}>Invert visible selection</button>{" "}
+            <button type="button" disabled={!filteredImportDiagnostics.some(item => item.outcome === "rejected")} onClick={() => selectDiagnosticSubset("rejected")}>Select matching rejected</button>{" "}
+            <button type="button" disabled={!filteredImportDiagnostics.some(item => diagnosticPinned.includes(diagnosticKey(item)))} onClick={() => selectDiagnosticSubset("pinned")}>Select matching pinned</button>{" "}
+            <button type="button" disabled={!diagnosticSelectedPinned} onClick={unpinSelectedDiagnostics}>Unpin selected</button>{" "}
+            <button type="button" disabled={!importDiagnostics.some(item => !diagnosticPinned.includes(diagnosticKey(item)))} onClick={removeUnpinnedDiagnostics}>Delete all unpinned</button>{" "}
+            <button type="button" disabled={!diagnosticPinned.length} onClick={pruneOrphanedDiagnosticPins}>Clean orphaned pins</button>{" "}
+            <button type="button" disabled={!selectedImportDiagnostics.length} onClick={exportSelectedDiagnosticsCsv}>Export selected CSV</button>{" "}
+            <button type="button" disabled={!importDiagnostics.some(item => diagnosticPinned.includes(diagnosticKey(item)))} onClick={exportPinnedDiagnostics}>Export pinned JSON</button>
+
+            <button type="button" disabled={!visibleImportDiagnostics.length} onClick={() => setDiagnosticSelected(previous => Array.from(new Set([...previous, ...visibleImportDiagnostics.map(diagnosticKey)])))}>Select visible page</button>{" "}
+            <button type="button" disabled={!filteredImportDiagnostics.length} onClick={() => setDiagnosticSelected(filteredImportDiagnostics.map(diagnosticKey))}>Select all matching</button>{" "}
+            <button type="button" disabled={!diagnosticSelected.length} onClick={() => setDiagnosticSelected([])}>Clear selection</button>{" "}
+            <button type="button" disabled={!selectedImportDiagnostics.length} onClick={exportSelectedDiagnostics}>Export selected JSON</button>{" "}
+            <button type="button" disabled={!selectedImportDiagnostics.length} onClick={deleteSelectedDiagnostics}>Delete selected local records</button>
+            <label>Result <select value={diagnosticFilter} onChange={e => setDiagnosticFilter(e.target.value)}><option value="all">All</option><option value="verified">Verified</option><option value="legacy">Legacy unverified</option><option value="rejected">Rejected</option></select></label>
+            <label>Search diagnostics <input type="search" value={diagnosticSearch} onChange={e => { setDiagnosticSearch(e.target.value); setDiagnosticPage(1); }} placeholder="Filename, validation check or error" /></label>
+            <label>Filename contains <input type="search" value={diagnosticFileFilter} onChange={e => { setDiagnosticFileFilter(e.target.value); setDiagnosticPage(1); }} placeholder="Filter by filename" /></label>
+            <label>Validation checkpoint contains <input type="search" value={diagnosticCheckFilter} onChange={e => { setDiagnosticCheckFilter(e.target.value); setDiagnosticPage(1); }} placeholder="Filter by passed check" /></label>
+            <label>From <input type="date" value={diagnosticFrom} onChange={e => setDiagnosticFrom(e.target.value)} /></label>
+            <label>To <input type="date" value={diagnosticTo} onChange={e => setDiagnosticTo(e.target.value)} /></label>
+            <label>Minimum file size (bytes) <input type="number" min="0" step="1" value={diagnosticMinBytes} onChange={e => { setDiagnosticMinBytes(e.target.value); setDiagnosticPage(1); }} /></label>
+            <label>Maximum file size (bytes) <input type="number" min="0" step="1" value={diagnosticMaxBytes} onChange={e => { setDiagnosticMaxBytes(e.target.value); setDiagnosticPage(1); }} /></label>
+            <label><input type="checkbox" checked={diagnosticErrorsOnly} onChange={e => { setDiagnosticErrorsOnly(e.target.checked); setDiagnosticPage(1); }} /> Errors only</label>
+            <label>Order <select value={diagnosticSort} onChange={e => setDiagnosticSort(e.target.value as "newest" | "oldest")}><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></label>
+            <p className="muted">Matching {filteredImportDiagnostics.length} of {importDiagnostics.length} retained attempts | Verified: {diagnosticCounts.verified} | Legacy: {diagnosticCounts.legacy} | Rejected: {diagnosticCounts.rejected}</p>
+            <p className="muted">Import acceptance rate: {diagnosticSuccessPercent === null ? "No matching attempts" : `${diagnosticSuccessPercent}%`} (verified or legacy accepted). This is a backup-import metric, not camera reliability.</p>
+            <p className="muted">Unique filenames: {diagnosticUniqueFiles} | Average file size: {diagnosticAverageBytes === null ? "N/A" : `${diagnosticAverageBytes} bytes`} | Passed checkpoints: {diagnosticTotalChecks}</p>
+            <p className="muted">Most recent retained attempt: {diagnosticLatestAttempt ? `${new Date(diagnosticLatestAttempt.at).toLocaleString()} (${diagnosticLatestAttempt.outcome})` : "None"}</p>
+            <label><input type="checkbox" checked={diagnosticShowChecks} onChange={e => setDiagnosticShowChecks(e.target.checked)} /> Show validation checkpoints</label>
+            <label><input type="checkbox" checked={diagnosticShowErrors} onChange={e => setDiagnosticShowErrors(e.target.checked)} /> Show error details</label>
+            <label>Records per page <select value={diagnosticPageSize} onChange={e => { setDiagnosticPageSize(Number(e.target.value)); setDiagnosticPage(1); }}><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option></select></label>
+            <span className="muted"> Showing {diagnosticVisibleStart}-{diagnosticVisibleEnd} of {filteredImportDiagnostics.length} | Page {safeDiagnosticPage} of {diagnosticPageCount} </span>
+            <button type="button" disabled={safeDiagnosticPage <= 1} onClick={() => setDiagnosticPage(1)}>First page</button>{" "}
+            <button type="button" disabled={safeDiagnosticPage <= 1} onClick={() => setDiagnosticPage(p => Math.max(1, p - 1))}>Previous page</button>{" "}
+            <button type="button" disabled={safeDiagnosticPage >= diagnosticPageCount} onClick={() => setDiagnosticPage(p => Math.min(diagnosticPageCount, p + 1))}>Next page</button>{" "}
+            <button type="button" disabled={safeDiagnosticPage >= diagnosticPageCount} onClick={() => setDiagnosticPage(diagnosticPageCount)}>Last page</button>
+            <label>Go to page <input type="number" min="1" max={diagnosticPageCount} value={diagnosticJumpPage} onChange={e => setDiagnosticJumpPage(e.target.value)} style={{ width: 70 }} /></label>
+            <button type="button" onClick={() => { const page = Number(diagnosticJumpPage); if (Number.isInteger(page) && page >= 1 && page <= diagnosticPageCount) setDiagnosticPage(page); }}>Go</button>{" "}
+            <button type="button" onClick={() => { setDiagnosticFilter("all"); setDiagnosticSearch(""); setDiagnosticFrom(""); setDiagnosticTo(""); setDiagnosticSort("newest"); setDiagnosticMinBytes(""); setDiagnosticMaxBytes(""); setDiagnosticErrorsOnly(false); setDiagnosticFileFilter(""); setDiagnosticCheckFilter(""); setDiagnosticShowChecks(true); setDiagnosticShowErrors(true); setDiagnosticPinnedOnly(false); setDiagnosticNotesOnly(false); setDiagnosticNoteSearch(""); setDiagnosticGroupBy("none"); setDiagnosticTriageStatusFilter("all"); setDiagnosticTriagePriorityFilter("all"); setDiagnosticTriageOnlyOpen(false); setDiagnosticTriageOnlyHigh(false); setDiagnosticPage(1); setDiagnosticJumpPage("1"); }}>Reset filters</button>{" "}
+            <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportImportDiagnostics}>Export diagnostics CSV</button>{" "}
+            <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportImportDiagnosticsJson}>Export diagnostics JSON</button>{" "}
+            <button type="button" onClick={exportDiagnosticSummary}>Export summary JSON</button>{" "}
+            <button type="button" disabled={!filteredImportDiagnostics.length} onClick={exportDiagnosticMarkdown}>Export report Markdown</button>{" "}
+            <button type="button" disabled={!importDiagnostics.length} onClick={() => { if (window.confirm("Clear this browser's threshold import diagnostic history?")) { setImportDiagnostics([]); setDiagnosticSelected([]); setDiagnosticPinned([]); localStorage.removeItem("tournament-threshold-import-diagnostics-v1"); localStorage.removeItem("tournament-threshold-import-pins-v1"); setDiagnosticNotes({}); localStorage.removeItem("tournament-threshold-import-notes-v1"); setDiagnosticTriage({}); localStorage.removeItem("tournament-threshold-import-triage-v1"); setDiagnosticReviewOwners({}); localStorage.removeItem("tournament-threshold-import-owners-v1"); } }}>Clear local history</button>
+            {diagnosticCopyNotice && <p role="status" className="muted">{diagnosticCopyNotice}</p>}
+            {visibleImportDiagnostics.map((item, index) => <details key={`${item.at}-${index}`} className="compact-collapsible"><summary>{new Date(item.at).toLocaleString()} | {item.outcome} | {item.fileName}</summary>
+              <p>File size: {item.bytes} bytes</p>
+              <label>Triage status <select value={triageFor(diagnosticKey(item)).status} onChange={e => updateDiagnosticTriage([diagnosticKey(item)], { status: e.target.value as DiagnosticTriage["status"] })}><option value="new">New</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option></select></label>
+              <label>Priority <select value={triageFor(diagnosticKey(item)).priority} onChange={e => updateDiagnosticTriage([diagnosticKey(item)], { priority: e.target.value as DiagnosticTriage["priority"] })}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option></select></label>
+              <label>Operator note (browser-local, 500 characters max) <textarea rows={2} maxLength={500} value={diagnosticNotes[diagnosticKey(item)] || ""} onChange={e => saveDiagnosticNote(diagnosticKey(item), e.target.value)} placeholder="Add investigation details" /></label>
+              <button type="button" disabled={!diagnosticNotes[diagnosticKey(item)]} onClick={() => saveDiagnosticNote(diagnosticKey(item), "")}>Clear note</button>
+              {diagnosticShowChecks && item.checks.map((check, i) => <p key={i}>Passed: {check}</p>)}
+              {diagnosticShowErrors && item.error && <p role="alert">Rejected: {item.error}</p>}
+              <label><input type="checkbox" checked={diagnosticSelected.includes(diagnosticKey(item))} onChange={e => setDiagnosticSelected(previous => e.target.checked ? Array.from(new Set([...previous, diagnosticKey(item)])) : previous.filter(key => key !== diagnosticKey(item)))} /> Select record</label>{" "}
+              <button type="button" onClick={() => toggleDiagnosticPin(diagnosticKey(item))}>{diagnosticPinned.includes(diagnosticKey(item)) ? "Unpin record" : "Pin record"}</button>{" "}
+              <button type="button" onClick={() => void copySingleDiagnostic(item)}>Copy details</button>{" "}
+              <button type="button" onClick={() => exportSingleDiagnostic(item)}>Export this record JSON</button>
+            </details>)}
+          </details>
+          {importedRules && <div className="bulk-results"><p><strong>Validated backup:</strong> {importFileName}</p>
+            {importIntegrityStatus && <p className="muted">{importIntegrityStatus}</p>}
+            <p className="muted">Compare the imported values against the current editor. Select only the fields to restore. Unselected values remain unchanged.</p>
+            <button type="button" onClick={() => setSelectedImportFields(Object.keys(importedRules) as Array<keyof ReliabilityRules>)}>Select all</button>{" "}
+            <button type="button" onClick={() => setSelectedImportFields([])}>Select none</button>
+            {(Object.keys(importedRules) as Array<keyof ReliabilityRules>).map(key => <label key={key} style={{ display: "block" }}>
+              <input type="checkbox" checked={selectedImportFields.includes(key)} onChange={e => setSelectedImportFields(previous => e.target.checked ? [...previous, key] : previous.filter(field => field !== key))} />{" "}
+              <strong>{key}</strong>: current {reliabilityRules[key]} → backup {importedRules[key]} {reliabilityRules[key] === importedRules[key] ? "(unchanged)" : "(different)"}
+            </label>)}
+            {importMergeError && <p role="alert">Selected fields produce invalid thresholds: {importMergeError}. Adjust your selection before applying.</p>}
+            {mergedImportRules && !importMergeError && <p className="muted">Merged preview: {Object.entries(mergedImportRules).map(([key, value]) => `${key}=${value}`).join(", ")}</p>}
+            <button type="button" disabled={!selectedImportFields.length || !!importMergeError || rulesSaving || rulesConflict || !rulesReady} onClick={applyReliabilityImport}>Apply selected values to editor</button>
+            <button type="button" onClick={() => { setImportedRules(null); setImportFileName(""); setSelectedImportFields([]); }}>Cancel import</button>
+          </div>}
+        </details>
+        <details className="compact-collapsible"><summary>Shared threshold change history ({ruleHistory.length})</summary>
+          <p className="muted">Last 500 recorded changes, newest first. Timestamps use your local timezone. Changes are shared across connected dashboards.</p>
+          {ruleHistory.length === 0 ? <p>No threshold changes recorded.</p> : ruleHistory.slice(0, 50).map(change => <div key={change.id} className="bulk-results">
+            <p><strong>{new Date(change.at).toLocaleString()}</strong> {change.note ? `| ${change.note}` : "| No reason supplied"}</p>
+            <button type="button" disabled={rulesSaving || rulesConflict || rulesVersion === null} onClick={() => void restoreHistoricalRules(change.id, "before")}>Restore previous values</button>
+            <button type="button" disabled={rulesSaving || rulesConflict || rulesVersion === null} onClick={() => void restoreHistoricalRules(change.id, "after")}>Restore updated values</button>
+            {(Object.keys(change.after) as Array<keyof ReliabilityRules>).filter(key => change.before[key] !== change.after[key]).map(key => <p key={key}>{key}: {change.before[key]} → {change.after[key]}</p>)}
+          </div>)}
+        </details>
+        {reliabilityWarnings.length === 0 ? <p>No cameras currently cross the configured reliability thresholds.</p> :
+          <div className="bulk-results">{reliabilityWarnings.map(warning => <p key={warning.cameraId} role="status">
+            <strong>{warning.severity}: {warning.cameraId}</strong> | {warning.failures} failures / {warning.attempts} attempts | {warning.rate}% successful
+          </p>)}</div>}
+      </details>
+      <details className="compact-collapsible"><summary>Reliability warning history ({reliabilityHistory.length})</summary>
+        <p className="muted">Shared server history of changes between Normal, Warning, and Critical. A new audit attempt or a threshold/reporting-period change can produce a transition. No changes are recorded on an unchanged polling refresh. Transitions and acknowledgements synchronize through the node service.</p>
+        <label>Transition to <select value={historyFilter} onChange={e => setHistoryFilter(e.target.value)}>
+          <option value="all">All states</option><option value="Warning">Warning</option><option value="Critical">Critical</option><option value="Normal">Normal</option>
+        </select></label>
+        <label>Operator review <select value={historyReviewFilter} onChange={e => setHistoryReviewFilter(e.target.value)}>
+          <option value="all">All</option><option value="unreviewed">Unacknowledged</option><option value="reviewed">Acknowledged</option>
+        </select></label>
+        <button type="button" disabled={!visibleReliabilityHistory.length} onClick={exportReliabilityHistory}>Export warning history CSV</button>
+        {visibleReliabilityHistory.length === 0 ? <p>No recorded warning transitions.</p> :
+          <div className="bulk-results">{visibleReliabilityHistory.slice(0, 50).map((item, index) => <p key={`${item.at}-${item.cameraId}-${index}`}>
+            <strong>{item.cameraId}: {item.from} → {item.to}</strong> | {new Date(item.at).toLocaleString()} | {item.reason}
+            {reliabilityReviews[reliabilityReviewKey(item)] ?
+              <span> | Acknowledged {new Date(reliabilityReviews[reliabilityReviewKey(item)].acknowledgedAt).toLocaleString()} | Note: {reliabilityReviews[reliabilityReviewKey(item)].note}</span> :
+              <span> | Unacknowledged <label>Operator note <input type="text" maxLength={1000} value={reviewNotes[reliabilityReviewKey(item)] || ""} onChange={e => setReviewNotes(previous => ({ ...previous, [reliabilityReviewKey(item)]: e.target.value }))} /></label>
+                <button type="button" disabled={!((reviewNotes[reliabilityReviewKey(item)] || "").trim())} onClick={() => acknowledgeReliabilityWarning(item)}>Acknowledge</button></span>}
+          </p>)}</div>}
+        {visibleReliabilityHistory.length > 50 && <p className="muted">Showing 50 of {visibleReliabilityHistory.length} matching transitions. CSV includes all matches.</p>}
+      </details>
+      <details className="compact-collapsible"><summary>Camera reliability breakdown ({recoveryStatistics.cameras.length})</summary>
+        {recoveryStatistics.cameras.length === 0 ? <p>No recovery attempts in this period.</p> :
+          <div className="bulk-results">{recoveryStatistics.cameras.map(camera => <p key={camera.cameraId}>
+            <strong>{camera.cameraId}</strong>: {camera.successes} successful, {camera.failures} failed ({Math.round(camera.successes * 100 / (camera.successes + camera.failures))}% success)
+          </p>)}</div>}
+      </details>
+      <details className="compact-collapsible"><summary>Daily recovery trend ({recoveryStatistics.daily.length} days with attempts)</summary>
+        {recoveryStatistics.daily.length === 0 ? <p>No recovery attempts in this period.</p> :
+          <div className="bulk-results">{recoveryStatistics.daily.map(day => <p key={day.day}>
+            <strong>{day.day}</strong>: {day.successes} successful, {day.failures} failed
+          </p>)}</div>}
+      </details>
+    </details>
+    <details className="compact-collapsible"><summary>Incident timeline and operator audit ({audit.length})</summary>
+      <p className="muted">Search and filter the latest 2,000 retained audit events. Export downloads the filtered records as CSV. Filters do not alter the stored audit.</p>
+      <div className="bulk-results">
+        <label>Search camera, event or details <input type="search" value={auditSearch} onChange={e => setAuditSearch(e.target.value)} placeholder="Search audit" /></label>
+        <label>Event type <select value={auditType} onChange={e => setAuditType(e.target.value)}>
+          <option value="all">All types</option><option value="failure">Failure</option><option value="success">Success</option>
+          <option value="acknowledged">Acknowledged</option><option value="resolved">Resolved</option><option value="reopened">Reopened</option>
+        </select></label>
+        <label>From <input type="date" value={auditFrom} onChange={e => setAuditFrom(e.target.value)} /></label>
+        <label>Through <input type="date" value={auditTo} onChange={e => setAuditTo(e.target.value)} /></label>
+        <p>{filteredAudit.length} matching events of {audit.length} retained.</p>
+        <button type="button" onClick={() => { setAuditSearch(""); setAuditType("all"); setAuditFrom(""); setAuditTo(""); }}>Clear filters</button>
+        <button type="button" disabled={filteredAudit.length === 0} onClick={exportAuditCsv}>Export filtered CSV ({filteredAudit.length})</button>
+      </div>
+      {filteredAudit.length === 0 ? <p>No matching audit events.</p> :
+        <div className="bulk-results">{filteredAudit.slice(0, 100).map((entry, index) => <p key={`${entry.at}-${entry.cameraId}-${entry.type}-${index}`}>
+          <strong>{entry.type}</strong> | {new Date(entry.at).toLocaleString()} | {entry.cameraId}: {entry.detail}
+        </p>)}</div>}
+      {filteredAudit.length > 100 && <p className="muted">Showing first 100 matching events. CSV export includes all {filteredAudit.length} matches.</p>}
+    </details>
+    <details className="compact-collapsible"><summary>Recovery history ({events.length})</summary>
+      {events.length === 0 ? <p>No recovery attempts recorded.</p> :
+        <div className="bulk-results">{events.map((event, i) => <p key={`${event.at}-${event.cameraId}-${i}`}>
+          <strong>{event.outcome === "success" ? "Recovered" : "Failed"}</strong> | {new Date(event.at).toLocaleString()} | {event.cameraId}: {event.detail} {event.acknowledgedAt ? "| Acknowledged" : event.outcome === "failure" ? "| Needs review" : ""}
+        </p>)}</div>}
+    </details>
+  </section>;
+}
+
+function CaptureSignalHealthPanel({ requestNode, nodeId }: {
+  requestNode: (url: string, options?: RequestInit) => Promise<any>; nodeId: string;
+}) {
+  const [rules, setRules] = useState<SignalAlertRules>(() => loadSignalRules(nodeId));
+  const rulesRef = useRef(rules);
+  const [cameraOverrides, setCameraOverrides] = useState<Record<string, CameraSignalOverride>>(() => loadCameraSignalOverrides(nodeId));
+  const overridesRef = useRef(cameraOverrides);
+  const [monitoringPaused, setMonitoringPaused] = useState(false);
+  // A manual retry starts a new polling cycle without touching capture or stream processes.
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  const [lastAttemptAt, setLastAttemptAt] = useState<number | null>(null);
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+  const [pollInFlight, setPollInFlight] = useState(false);
+  const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
+  const [reconnectionCount, setReconnectionCount] = useState(0);
+  const failureStreakRef = useRef(0);
+  const lastSuccessfulAtRef = useRef<number | null>(null);
+  const [displayClock, setDisplayClock] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setDisplayClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const pausedRef = useRef(false);
+  useEffect(() => { overridesRef.current = cameraOverrides; try { localStorage.setItem(`tournament-camera-signal-rules:v1:${nodeId}`, JSON.stringify(cameraOverrides)); } catch { /* storage unavailable */ } }, [cameraOverrides, nodeId]);
+  useEffect(() => { pausedRef.current = monitoringPaused; }, [monitoringPaused]);
+  const streaks = useRef(new Map<string, number>());
+  const lastEventAt = useRef(new Map<string, number>());
+  const emittedWarning = useRef(new Set<string>());
+  useEffect(() => { rulesRef.current = rules; try { localStorage.setItem(`tournament-signal-rules:v1:${nodeId}`, JSON.stringify(rules)); } catch { /* private browsing */ } }, [rules, nodeId]);
+  useEffect(() => { setRules(loadSignalRules(nodeId)); setCameraOverrides(loadCameraSignalOverrides(nodeId)); setMonitoringPaused(false); failureStreakRef.current = 0; lastSuccessfulAtRef.current = null; setNextRetryAt(null); setConsecutiveFailures(0); setReconnectionCount(0); previous.current = null; previousError.current = false; streaks.current.clear(); lastEventAt.current.clear(); emittedWarning.current.clear(); }, [nodeId]);
+  const [snapshot, setSnapshot] = useState<CaptureSignalSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const storageKey = `tournament-signal-alerts:v1:${nodeId}`;
+  const [alerts, setAlerts] = useState<SignalAlert[]>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(storageKey) || "[]");
+      return Array.isArray(parsed) ? parsed.filter((a): a is SignalAlert =>
+        a !== null && typeof a === "object" && typeof a.id === "number" &&
+        typeof a.at === "number" && typeof a.cameraName === "string" &&
+        typeof a.message === "string" && (a.level === "warning" || a.level === "recovered")
+      ).slice(0, 500) : [];
+    } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify(alerts)); } catch { /* storage unavailable */ }
+  }, [alerts, storageKey]);
+  function exportAlerts(format: "json" | "csv") {
+    const fields = ["at", "cameraName", "kind", "level", "severity", "message", "acknowledged"] as const;
+    const escapeCsv = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const body = format === "json" ? JSON.stringify({ exportedAt: new Date().toISOString(), nodeId, alerts }, null, 2)
+      : [fields.join(","), ...alerts.map(alert => fields.map(field =>
+        escapeCsv(field === "at" ? new Date(alert.at).toISOString() : alert[field])).join(","))].join("\r\n");
+    const blob = new Blob([body], { type: format === "json" ? "application/json" : "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a"); link.href = url;
+    link.download = `signal-alerts-${nodeId.replace(/[^a-z0-9_-]/gi, "_")}.${format}`;
+    link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLevel, setHistoryLevel] = useState<"all" | "warning" | "recovered">("all");
+  const [historyKind, setHistoryKind] = useState<"all" | SignalAlertKind>("all");
+  const [historySearch, setHistorySearch] = useState("");
+  const [onlyUnacknowledged, setOnlyUnacknowledged] = useState(false);
+  const [historySeverity, setHistorySeverity] = useState<"all" | "warning" | "critical">("all");
+  const previous = useRef<Map<string, { video: string; audio: string }> | null>(null);
+  const previousError = useRef(false);
+  const sequence = useRef(Math.max(0, ...alerts.map(alert => alert.id)));
+  useEffect(() => {
+    let mounted = true;
+    let pending = false;
+    let retryDueAt = 0;
+    const addAlerts = (events: Omit<SignalAlert, "id">[]) => {
+      if (!events.length || !mounted) return;
+      setAlerts(old => [...events.map(event => ({ ...event, id: ++sequence.current })), ...old].slice(0, 500));
+    };
+    const refresh = async () => {
+      if (pending || pausedRef.current || (retryDueAt > Date.now())) return;
+      pending = true;
+      setPollInFlight(true);
+      setLastAttemptAt(Date.now());
+      try {
+        const result = await requestNode("/api/captures/signal-diagnostics") as CaptureSignalSnapshot;
+        if (!mounted) return;
+        if (!result || !Array.isArray(result.captures)) throw new Error("Invalid signal diagnostics response");
+        const now = Date.now();
+        const current = new Map<string, { video: string; audio: string }>();
+        const events: Omit<SignalAlert, "id">[] = [];
+        for (const item of result.captures) {
+          const activeRules = cameraRules(rulesRef.current, overridesRef.current[item.cameraId]);
+          const { video, audio } = classifiedSignal(item, activeRules);
+          current.set(item.cameraId, { video, audio });
+          const prior = previous.current?.get(item.cameraId);
+          if (!prior) continue; // Initial readings and newly started captures establish a baseline.
+          const checks = activeRules.consecutiveChecks;
+          const observe = (kind: "video" | "audio", currentState: string, priorState: string, warning: (state: string) => boolean) => {
+            const key = `${item.cameraId}:${kind}`;
+            if (currentState === priorState) {
+              // Accumulate persistent warnings even when state is unchanged.
+              if (warning(currentState)) streaks.current.set(key, Math.min(checks, (streaks.current.get(key) || 0) + 1));
+              else streaks.current.delete(key);
+            } else if (warning(currentState)) streaks.current.set(key, 1);
+            else streaks.current.delete(key);
+            if (!activeRules.enabled) { emittedWarning.current.delete(key); streaks.current.delete(key); return; }
+            if (!warning(currentState)) emittedWarning.current.delete(key);
+            const warningNow = warning(currentState);
+            const warningBefore = warning(priorState);
+            const eventKey = `${key}:${warningNow ? currentState : "recovered"}`;
+            const elapsed = now - (lastEventAt.current.get(eventKey) || 0);
+            if (warningNow && !emittedWarning.current.has(key) && (streaks.current.get(key) || 0) >= checks && elapsed >= activeRules.cooldownSeconds * 1000) {
+              events.push({ at: now, cameraName: item.cameraName, kind, level: "warning", severity: signalSeverity(kind, currentState), message: `${kind === "video" ? "Video" : "Audio"}: ${currentState}` });
+              lastEventAt.current.set(eventKey, now);
+              emittedWarning.current.add(key);
+              streaks.current.set(key, 0);
+            } else if (!warningNow && warningBefore && elapsed >= activeRules.cooldownSeconds * 1000) {
+              events.push({ at: now, cameraName: item.cameraName, kind, level: "recovered", message: `${kind === "video" ? "Video" : "Audio"} signal restored` });
+              lastEventAt.current.set(eventKey, now);
+            }
+          };
+          observe("video", video, prior.video, isVideoWarning);
+          observe("audio", audio, prior.audio, state => isAudioWarning(state) || (activeRules.alertOnSilence && state === "audio-silent"));
+        }
+        if (previousError.current) {
+          setReconnectionCount(count => count + 1);
+          const gapSeconds = lastSuccessfulAtRef.current === null ? "unknown" : String(Math.round((now - lastSuccessfulAtRef.current) / 1000));
+          if (rulesRef.current.enabled) events.push({ at: now, cameraName: "Local node", kind: "connection", level: "recovered", message: `Signal diagnostics connection restored after ${gapSeconds}s; ${failureStreakRef.current} failed check(s)` });
+        }
+        failureStreakRef.current = 0;
+        lastSuccessfulAtRef.current = now;
+        retryDueAt = 0;
+        setNextRetryAt(null);
+        previous.current = current;
+        previousError.current = false;
+        addAlerts(events);
+        setSnapshot(result);
+        setUpdatedAt(now);
+        setError(null);
+        setConsecutiveFailures(0);
+      } catch (cause) {
+        if (mounted) {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          if (rulesRef.current.enabled && !previousError.current) addAlerts([{ at: Date.now(), cameraName: "Local node", kind: "connection", level: "warning", severity: "critical", message: `Signal diagnostics unavailable: ${message}` }]);
+          previousError.current = true;
+          // Avoid false per-camera recovery alerts after a gap in monitoring.
+          previous.current = null;
+          setError(message);
+          failureStreakRef.current += 1;
+          setConsecutiveFailures(failureStreakRef.current);
+          // Exponential backoff prevents a disconnected remote node from being hammered.
+          // 3s, 6s, 12s, 24s, capped at 30s; no overlapping requests.
+          const delay = Math.min(30000, 3000 * 2 ** Math.min(4, failureStreakRef.current - 1));
+          retryDueAt = Date.now() + delay;
+          setNextRetryAt(retryDueAt);
+        }
+      } finally { pending = false; if (mounted) setPollInFlight(false); }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 3000);
+    return () => { mounted = false; window.clearInterval(timer); };
+  }, [requestNode, retryGeneration]);
+
+  const formatAge = (value: number | null | undefined) =>
+    typeof value === "number" && Number.isFinite(value) ? `${(value / 1000).toFixed(1)}s` : "n/a";
+  const videoLabel = (status: string, freeze: number | null | undefined) =>
+    typeof freeze === "number" && freeze > 0 ? "Possible freeze" :
+    status === "receiving" ? "Receiving" : status;
+  const audioLabel = (status: string) => ({
+    "audio-active": "Active", "audio-silent": "Silent", "no-audio-samples": "No samples",
+    "audio-samples-stalled": "Samples stalled", "unverified-no-silence-event": "Unverified"
+  } as Record<string, string>)[status] || status;
+  const tone = (status: string) =>
+    status === "receiving" || status === "audio-active" ? "#1b8155" :
+    status === "audio-silent" || status === "waiting" || status.startsWith("unverified") ? "#a06a16" : "#b63d3d";
+  const warningCount = alerts.filter(alert => alert.level === "warning" && !alert.acknowledged).length;
+  const filteredAlerts = alerts.filter(alert =>
+    (historyLevel === "all" || alert.level === historyLevel) &&
+    (historySeverity === "all" || (alert.severity ?? "warning") === historySeverity) &&
+    (historyKind === "all" || alert.kind === historyKind) &&
+    (!onlyUnacknowledged || !alert.acknowledged) &&
+    (!historySearch.trim() || `${alert.cameraName} ${alert.kind} ${alert.message}`.toLowerCase().includes(historySearch.trim().toLowerCase()))
+  );
+  const acknowledge = (id: number) => setAlerts(old => old.map(alert =>
+    alert.id === id ? { ...alert, acknowledged: !alert.acknowledged } : alert));
+  return <section className="overview" aria-label="Capture signal health">
+    <h2>Capture Signal Health</h2>
+    <p className="muted">Local video and microphone diagnostics, refreshed every 3 seconds.</p>
+    <div role="status" aria-live="polite" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, marginBottom: 8 }}>
+      <strong>{monitoringPaused ? "Paused" : error ? "Connection error" : updatedAt === null ? "Waiting for first reading" : displayClock - updatedAt > 10000 ? "Diagnostics stale" : "Monitoring"}</strong>
+      <span className="muted">{updatedAt === null ? "No successful reading yet" : `Last successful reading ${Math.max(0, Math.floor((displayClock - updatedAt) / 1000))}s ago`}</span>
+      {lastAttemptAt !== null && <span className="muted">Last attempt: {new Date(lastAttemptAt).toLocaleTimeString()}</span>}
+      {consecutiveFailures > 0 && <span role="alert">Failed checks: {consecutiveFailures}</span>}
+      {nextRetryAt !== null && !monitoringPaused && <span className="muted">Automatic retry in {Math.max(0, Math.ceil((nextRetryAt - displayClock) / 1000))}s</span>}
+      {reconnectionCount > 0 && <span className="muted">Recovered connections: {reconnectionCount}</span>}
+      {pollInFlight && <span className="muted">Checking...</span>}
+      <button type="button" disabled={pollInFlight || monitoringPaused} onClick={() => {
+        previous.current = null;
+        streaks.current.clear();
+        setNextRetryAt(null);
+        setRetryGeneration(value => value + 1);
+      }}>Check now</button>
+    </div>
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+      <button type="button" onClick={() => { setMonitoringPaused(v => !v); previous.current = null; streaks.current.clear(); }}>{monitoringPaused ? "Resume monitoring" : "Pause monitoring"}</button>
+      {monitoringPaused && <span role="status" className="muted">Monitoring paused. Last readings remain visible; no new alerts are generated.</span>}
+    </div>
+    {error && <p role="alert">Signal diagnostics unavailable: {error}{updatedAt !== null ? " (showing last successful reading)" : ""}</p>}
+    {!snapshot && !error && <p className="muted">Loading signal diagnostics...</p>}
+    {snapshot && snapshot.captures.length === 0 && <p className="muted">No active local camera captures.</p>}
+    {snapshot && snapshot.captures.length > 0 && <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.88rem" }}>
+        <thead><tr><th style={{ textAlign: "left" }}>Camera</th><th style={{ textAlign: "left" }}>Video</th>
+          <th style={{ textAlign: "left" }}>Frame age</th><th style={{ textAlign: "left" }}>Audio</th>
+          <th style={{ textAlign: "left" }}>RMS</th><th style={{ textAlign: "left" }}>Sample age</th></tr></thead>
+        <tbody>{snapshot.captures.map(item => {
+          const freeze = item.video.possibleFreezeMs;
+          const videoStatus = videoSignalState(item);
+          return <tr key={item.cameraId} style={{ borderTop: "1px solid var(--border-color, #8884)" }}>
+            <td style={{ padding: "6px 10px 6px 0" }}>{item.cameraName}</td>
+            <td style={{ color: tone(videoStatus), fontWeight: 600 }}>{videoLabel(item.video.status, freeze)}
+              {typeof freeze === "number" && freeze > 0 ? ` (${formatAge(freeze)})` : ""}</td>
+            <td>{formatAge(item.video.frameAgeMs)}</td>
+            <td style={{ color: tone(item.audio.status), fontWeight: 600 }}>{audioLabel(item.audio.status)}</td>
+            <td>{typeof item.audio.rmsDb === "number" && Number.isFinite(item.audio.rmsDb)
+              ? `${item.audio.rmsDb.toFixed(1)} dBFS` : "n/a"}</td>
+            <td>{formatAge(item.audio.audioSampleAgeMs)}</td>
+          </tr>;
+        })}</tbody>
+      </table>
+    </div>}
+    {snapshot && <small className="muted">Checked {new Date(snapshot.checkedAt).toLocaleTimeString()}.
+      Static scenes can cause freeze warnings. Local audio activity does not verify YouTube playback.</small>}
+    <details className="tool-item compact-collapsible" style={{ marginTop: 10 }}>
+      <summary>Alert rules and thresholds</summary>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", padding: 8 }}>
+        <label><input type="checkbox" checked={rules.enabled} onChange={e => setRules(r => ({ ...r, enabled: e.target.checked }))} /> Enable alert events</label>
+        <label><input type="checkbox" checked={rules.alertOnSilence} onChange={e => setRules(r => ({ ...r, alertOnSilence: e.target.checked }))} /> Warn on quiet microphones</label>
+        {([ ["freezeWarningSeconds", "Freeze threshold (s)"], ["staleFrameSeconds", "Stale frame (s)"], ["missingAudioSeconds", "Missing audio (s)"], ["consecutiveChecks", "Consecutive checks"], ["cooldownSeconds", "Alert cooldown (s)"] ] as const).map(([key, label]) =>
+          <label key={key}>{label} <input type="number" min={1} max={key === "consecutiveChecks" ? 20 : 3600} style={{ width: 70 }} value={rules[key]}
+            onChange={e => { const n = Number(e.target.value); if (Number.isFinite(n) && n >= 1) setRules(r => ({ ...r, [key]: Math.min(key === "consecutiveChecks" ? 20 : 3600, Math.floor(n)) })); }} /></label>
+        )}
+        <button type="button" onClick={() => setRules({ ...DEFAULT_SIGNAL_RULES })}>Reset defaults</button>
+      </div>
+      <small className="muted">Rules are stored in this browser for the selected node. They affect dashboard alerts, not camera capture or FFmpeg detection. A quiet microphone can be normal.</small>
+    </details>
+    <details className="tool-item compact-collapsible" style={{ marginTop: 10 }}>
+      <summary>Camera-specific alert rules</summary>
+      <div style={{ display: "grid", gap: 10, padding: 8 }}>
+        {snapshot?.captures.length ? snapshot.captures.map(item => {
+          const override = cameraOverrides[item.cameraId] ?? DEFAULT_CAMERA_OVERRIDE;
+          const update = (patch: Partial<CameraSignalOverride>) => setCameraOverrides(old => ({ ...old, [item.cameraId]: { ...(old[item.cameraId] ?? DEFAULT_CAMERA_OVERRIDE), ...patch } }));
+          return <div key={item.cameraId} style={{ borderBottom: "1px solid var(--border-color, #8884)", paddingBottom: 8 }}>
+            <strong>{item.cameraName}</strong>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+              <label><input type="checkbox" checked={override.enabled} onChange={e => update({ enabled: e.target.checked })} /> Monitor camera</label>
+              {([ ["freezeWarningSeconds", "Freeze (s)"], ["staleFrameSeconds", "Stale frame (s)"], ["missingAudioSeconds", "Missing audio (s)"] ] as const).map(([key, label]) =>
+                <label key={key}>{label} <input type="number" min={1} max={3600} placeholder="Global" style={{ width: 76 }} value={override[key] ?? ""}
+                  onChange={e => update({ [key]: e.target.value === "" ? null : Math.max(1, Math.min(3600, Math.floor(Number(e.target.value) || 1))) })} /></label>
+              )}
+              <label>Quiet audio <select value={override.alertOnSilence === null ? "global" : override.alertOnSilence ? "on" : "off"}
+                onChange={e => update({ alertOnSilence: e.target.value === "global" ? null : e.target.value === "on" })}>
+                <option value="global">Global default</option><option value="on">Warn</option><option value="off">Ignore</option>
+              </select></label>
+              <button type="button" onClick={() => setCameraOverrides(old => { const next = { ...old }; delete next[item.cameraId]; return next; })}>Reset camera</button>
+            </div>
+          </div>;
+        }) : <span className="muted">Start a camera capture to configure its alert rules.</span>}
+      </div>
+      <small className="muted">Empty thresholds inherit the global values. Camera overrides are stored per node in this browser.</small>
+    </details>
+    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+      <button type="button" onClick={() => setShowHistory(value => !value)}
+        aria-expanded={showHistory} aria-controls="signal-alert-history">
+        {showHistory ? "Hide" : "Show"} Signal Alerts ({warningCount} warnings, {alerts.length} events)
+      </button>
+      {alerts.length > 0 && <button type="button" onClick={() => exportAlerts("json")}>Export JSON</button>}
+      {alerts.length > 0 && <button type="button" onClick={() => exportAlerts("csv")}>Export CSV</button>}
+      {alerts.length > 0 && <button type="button" onClick={() => { if (window.confirm("Clear saved signal alert history for this node?")) setAlerts([]); }}>Clear History</button>}
+      <small className="muted">Saved in this browser, latest 500 events.</small>
+    </div>
+    {showHistory && <div id="signal-alert-history" style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+        <label>Level <select value={historyLevel} onChange={event => setHistoryLevel(event.target.value as typeof historyLevel)}>
+          <option value="all">All</option><option value="warning">Warnings</option><option value="recovered">Recoveries</option>
+        </select></label>
+        <label>Severity <select value={historySeverity} onChange={event => setHistorySeverity(event.target.value as typeof historySeverity)}>
+          <option value="all">All</option><option value="warning">Warning</option><option value="critical">Critical</option>
+        </select></label>
+        <label>Signal <select value={historyKind} onChange={event => setHistoryKind(event.target.value as typeof historyKind)}>
+          <option value="all">All</option><option value="video">Video</option><option value="audio">Audio</option><option value="connection">Connection</option>
+        </select></label>
+        <label>Search <input type="search" value={historySearch} onChange={event => setHistorySearch(event.target.value)} placeholder="Camera or event" /></label>
+        <label><input type="checkbox" checked={onlyUnacknowledged} onChange={event => setOnlyUnacknowledged(event.target.checked)} /> Unacknowledged only</label>
+        <button type="button" disabled={!alerts.some(alert => alert.level === "warning" && !alert.acknowledged)}
+          onClick={() => setAlerts(old => old.map(alert => alert.level === "warning" ? { ...alert, acknowledged: true } : alert))}>
+          Acknowledge all warnings
+        </button>
+        <small className="muted">{filteredAlerts.length} of {alerts.length} events</small>
+      </div>
+      <div style={{ maxHeight: 260, overflow: "auto" }}>
+        {filteredAlerts.length === 0 ? <p className="muted">No matching signal events.</p> :
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <thead><tr><th style={{ textAlign: "left" }}>Time</th><th style={{ textAlign: "left" }}>Camera</th>
+              <th style={{ textAlign: "left" }}>Signal</th><th style={{ textAlign: "left" }}>Event</th><th style={{ textAlign: "left" }}>Review</th></tr></thead>
+            <tbody>{filteredAlerts.map(alert => <tr key={alert.id} style={{ borderTop: "1px solid var(--border-color, #8884)", opacity: alert.acknowledged ? 0.7 : 1 }}>
+              <td>{new Date(alert.at).toLocaleString()}</td><td>{alert.cameraName}</td>
+              <td>{alert.kind}</td>
+              <td style={{ color: alert.level === "warning" ? "#b63d3d" : "#1b8155" }}>{alert.level === "warning" ? `${alert.severity === "critical" ? "Critical" : "Warning"}: ` : "Recovered: "}{alert.message}</td>
+              <td><button type="button" onClick={() => acknowledge(alert.id)} aria-label={`${alert.acknowledged ? "Unacknowledge" : "Acknowledge"} ${alert.cameraName} ${alert.message}`}>
+                {alert.acknowledged ? "Reviewed" : "Acknowledge"}</button></td>
+            </tr>)}</tbody>
+          </table>}
+      </div>
+    </div>}
+  </section>;
 }
 
 function CaptureQualityPanel() {
@@ -5643,8 +7324,8 @@ function RingPreTournamentSignoff({ nodeId, eventId, eventName, assignments }: {
     window.document.body.appendChild(a); a.click(); a.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  return <details className="overview" aria-label="Per-ring pre-tournament operator sign-off">
-    <summary>Per-ring Pre-tournament Checklist</summary>
+  return <section className="overview" aria-label="Per-ring pre-tournament operator sign-off">
+    <h2>Per-ring Pre-tournament Checklist</h2>
     <p>Manually verify positioning, microphone audio, local recording quality, YouTube playback and
       recovery procedures for every assigned ring. Ticking a box does not perform a test.</p>
     {stale && <p role="alert">Assignments have changed since this checklist was saved. Reset the
@@ -5686,7 +7367,7 @@ function RingPreTournamentSignoff({ nodeId, eventId, eventName, assignments }: {
     <p>Saved in this browser for this node and event, not synchronized to other dashboards.
       Export the signed checklist for tournament records. Sign-off is an operator acknowledgement,
       not independent proof that streaming or recording works.</p>
-  </details>;
+  </section>;
 }
 
 function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, assignments,
@@ -5844,7 +7525,7 @@ function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, ass
       <p>Saved stress results may refer to a different USB arrangement or recording configuration.
         Refresh tournament readiness and repeat the stress test immediately before the event.
         YouTube connectivity is not verified by this report.</p>
-      <details><summary>Tournament-day operator checklist</summary>
+      <h3>Tournament-day operator checklist</h3>
       <p>Manually confirm each step. Checking a box does not perform the check automatically.
         Checklist entries are stored in this browser for the current event and node.</p>
       {checklistItems.map(item => <label key={item.id} style={{ display: "block", margin: "0.5rem 0" }}>
@@ -5866,7 +7547,6 @@ function TournamentHardwareReport({ requestNode, nodeId, eventName, eventId, ass
         {reportBlockers ? " Current automated checks require revalidation." : ""}</p>}
       <p>Sign-off is a local operator acknowledgement, not cryptographic authentication.
         Changes to checklist entries or a new report invalidate the existing sign-off.</p>
-      </details>
       <button type="button" onClick={download}>Download Hardware Report JSON</button>
     </div>}
   </section>;

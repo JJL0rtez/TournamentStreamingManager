@@ -1,0 +1,21 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { captureTransportPort, validateCaptureOwnership } from "../apps/node-service/src/capture-contract.ts";
+import { streamPort } from "../apps/node-service/src/stream-port.ts";
+import { CameraCapture } from "../apps/node-service/src/camera-capture.ts";
+import { CameraCaptureManager } from "../apps/node-service/src/camera-capture-manager.ts";
+import { YouTubeStreamManager } from "../apps/node-service/src/YouTubeStreamManager.ts";
+
+const active = [{ cameraId: "cam-A", cameraDeviceId: "DirectShow USB 1", microphoneName: "USB Mic 1" }];
+const empty = new Set<string>();
+test("285: capture transport port matches relay camera ID", () => assert.equal(captureTransportPort("cam-A", "DirectShow USB 1"), streamPort("cam-A")));
+test("286: device name does not change camera transport port", () => assert.equal(captureTransportPort("cam-A", "device-X"), captureTransportPort("cam-A", "device-Y")));
+test("287: empty logical camera ID is rejected", () => assert.throws(() => captureTransportPort(" "), /Camera ID/));
+test("288: active physical device cannot be opened twice", () => assert.throws(() => validateCaptureOwnership("cam-B", "DirectShow USB 1", "Mic 2", active, empty, empty), /Camera already/));
+test("289: active microphone cannot be opened twice", () => assert.throws(() => validateCaptureOwnership("cam-B", "Device 2", "USB Mic 1", active, empty, empty), /Microphone already/));
+test("290: pending physical camera blocks simultaneous start", () => assert.throws(() => validateCaptureOwnership("cam-B", "Device 2", "Mic 2", active, new Set(["Device 2"]), empty), /Camera already/));
+test("291: pending microphone blocks simultaneous start", () => assert.throws(() => validateCaptureOwnership("cam-B", "Device 2", "Mic 2", active, empty, new Set(["Mic 2"])), /Microphone already/));
+test("292: independent camera and mic can be reserved", () => assert.doesNotThrow(() => validateCaptureOwnership("cam-B", "Device 2", "Mic 2", active, empty, empty)));
+test("293: idle capture stop is safe and repeatable", async () => { const c = new CameraCapture(); await c.stop(); await c.stop(); assert.equal(c.isRunning, false); });
+test("294: idle capture manager and YouTube relay stopAll are safe", async () => { const c = new CameraCaptureManager(); const y = new YouTubeStreamManager(); await Promise.all([c.stopAll(), y.stopAll()]); assert.deepEqual(c.list(), []); assert.deepEqual(y.list(), []); });

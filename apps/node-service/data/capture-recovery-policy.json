@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "unhealthyChecks": 3,
+  "minimumCaptureAgeSeconds": 30,
+  "protectedStreams": true
+}

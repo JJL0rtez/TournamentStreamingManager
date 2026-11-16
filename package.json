@@ -11,7 +11,13 @@
     "dev": "npm run dev --workspace=@tournament/dashboard",
     "dev:node": "npm run dev --workspace=@tournament/node-service",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspace=@tournament/dashboard"
+    "build": "npm run build --workspace=@tournament/dashboard",
+    "check:core": "node scripts/core-check.mjs",
+    "check:api": "node scripts/api-smoke.mjs",
+    "check:baseline": "npm run check:core && npm run typecheck && npm run build",
+    "test:core": "node --import tsx --test tests/core-integration.test.mts",
+    "check:integration": "npm run typecheck && npm run test:core && npm run test:lifecycle",
+    "test:lifecycle": "node --import tsx --test tests/core-lifecycle.test.mts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

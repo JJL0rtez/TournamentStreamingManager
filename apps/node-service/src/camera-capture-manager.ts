@@ -1,3 +1,4 @@
+import { validateCaptureOwnership } from "./capture-contract.js";
 import { resolveOverlayImage } from "./overlay-assets.js";
 import { getCameraQuality } from "./camera-quality-settings.js";
 import { probeCameraCapabilities, selectCameraMode, type CameraMode } from "./camera-capabilities.js";
@@ -51,30 +52,9 @@ async start(
   recordingEnabled = true
 ): Promise<ManagedCapture> {
 
-    if (
-    this.captures.has(cameraId) ||
-    this.stoppingCaptures.has(cameraId) ||
-    this.pendingCameras.has(cameraDeviceId)
-    ) {
-    throw new Error(`Capture ${cameraId} is already active or transitioning.`);
-    }
-    if (
-      this.pendingCameras.has(cameraDeviceId) ||
-      [...this.captures.values()].some(
-        (item) => this.pendingCameras.has(cameraName)
-      )
-    ) {
-      throw new Error(`Camera ${cameraName} is already in use.`);
-    }
-
-    if (
-      this.pendingMicrophones.has(microphoneName) ||
-      [...this.captures.values()].some(
-        (item) => item.microphoneName === microphoneName
-      )
-    ) {
-      throw new Error(`Microphone ${microphoneName} is already in use.`);
-    }
+    if (this.stoppingCaptures.has(cameraId)) throw new Error(`Capture ${cameraId} is stopping.`);
+    validateCaptureOwnership(cameraId, cameraDeviceId, microphoneName,
+      [...this.captures.values()], this.pendingCameras, this.pendingMicrophones);
 
     this.pendingCameras.add(cameraDeviceId);
     this.pendingMicrophones.add(microphoneName);
@@ -106,6 +86,7 @@ async start(
         source: "recording-start" as const
       };
       const recordingPath = await capture.start({
+        cameraId,
         inputWidth: selectedMode?.width ?? quality.width,
         inputHeight: selectedMode?.height ?? quality.height,
         inputFps: selectedMode?.fps ?? quality.fps,
@@ -171,7 +152,7 @@ if (recordingEnabled) recordHistory({ cameraId, cameraName, recordingPath, start
 return managed;
 
     } catch (error) {
-      await capture.stop().catch(console.error);
+      await capture.stop().catch((stopError) => console.error("Capture startup cleanup failed:", stopError));
       throw error;
     } finally {
       this.pendingCameras.delete(cameraDeviceId);

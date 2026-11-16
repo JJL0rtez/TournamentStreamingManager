@@ -1,4 +1,9 @@
-import { saveOverlayImage, getOverlayImage, listOverlayImages } from "./overlay-assets.js";
+import { readVersionedRecoveryReliabilityRules, saveVersionedRecoveryReliabilityRules, ReliabilityRuleConflict, readRecoveryReliabilityRuleHistory, restoreRecoveryReliabilityRules } from "./recovery-reliability-rules.js";
+import { readSharedWarnings, addSharedWarning, acknowledgeSharedWarning } from "./shared-recovery-warnings.js";
+import { appendRecoveryAudit, readRecoveryAudit } from "./recovery-audit.js";
+import { readIncidentResolutions, saveIncidentResolutions } from "./recovery-incidents.js";
+import { readRecoveryAcknowledgements, saveRecoveryAcknowledgements, recoveryEventKey } from "./recovery-acknowledgements.js";
+import { readRecoveryPolicy, saveRecoveryPolicy } from "./recovery-policy.js";
 import { summarizeCameraReliability } from "./camera-reliability-summary.js";
 import { readDiagnosticThresholds, saveDiagnosticThresholds } from "./diagnostic-thresholds.js";
 import { investigateRecordingFailures } from "./failure-investigation.js";
@@ -23,9 +28,12 @@ import { listYouTubeProfiles, getYouTubeKey, saveYouTubeProfile, deleteYouTubePr
 import { getSettings, saveSettings, exportBackup, getNetworkBindAddress } from "./persistent-settings.js";
 import { getSession, setSession, recordingDirectory, listTournamentEvents, selectTournamentEvent } from "./tournament-session.js";
 
+import { readRecoveryHistory, appendPersistentRecoveryEvent } from "./recovery-history.js";
 import express from "express";
+import type { Server } from "node:http";
 import path from "node:path";
 import { mkdir, statfs } from "node:fs/promises";
+import { networkInterfaces } from "node:os";
 import { fileURLToPath } from "node:url";
 import { discoverDevices } from "./device-discovery.js";
 import { RecordingManager } from "./recording-manager.js";
@@ -62,25 +70,11 @@ let sharedCaptureStarting = false;
 let sharedCaptureStopping = false;
 
 const app = express();
-app.use(express.json({ limit: "8mb" }));
+app.use(express.json());
 installOperatorAuth(app);
 // Protect remote proxy writes too. Node token alone must not grant browser write privileges.
 app.use("/api", requireOperator);
 installRemoteNodeRoutes(app);
-// Overlay images are stored locally per node. Copy/import the image to each node that needs it.
-app.get("/api/overlays/images", (_req, res) => { res.json({ images: listOverlayImages() }); });
-app.post("/api/overlays/images", (req, res) => {
-  try { res.json({ imageId: saveOverlayImage(req.body?.base64, req.body?.filename) }); }
-  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
-});
-app.get("/api/overlays/images/:imageId", (req, res) => {
-  try {
-    const imageId = String(req.params.imageId);
-    res.setHeader("Cache-Control", "private, max-age=3600");
-    res.type(imageId.endsWith(".png") ? "png" : imageId.endsWith(".gif") ? "gif" : "jpeg").send(getOverlayImage(imageId));
-  } catch { res.status(404).json({ error: "Overlay image not found on this node" }); }
-});
-
 
 const recordingManager = new RecordingManager();
 // Recorded sessions remain visible after a backend restart.
@@ -1048,7 +1042,7 @@ app.get("/api/captures/health", async (_req, res) => {
 
 // Recovery safeguards: automatic recovery is disabled unless explicitly opted in.
 // Manual and automatic recovery share the same cooldown and hourly retry budget.
-const AUTO_RECOVERY = process.env.TOURNAMENT_AUTO_RECOVERY === "1";
+let recoveryPolicy = readRecoveryPolicy();
 const RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 const RECOVERY_WINDOW_MS = 60 * 60 * 1000;
 const RECOVERY_MAX_PER_HOUR = 2;
@@ -1056,8 +1050,32 @@ const recoveryAttempts = new Map<string, number[]>();
 const recoveringCaptures = new Set<string>();
 const unhealthySamples = new Map<string, number>();
 const recoveryMessages = new Map<string, string>();
+const recoveryEvents = readRecoveryHistory();
+let recoveryAcknowledgements = readRecoveryAcknowledgements();
+let incidentResolutions = readIncidentResolutions();
+function appendRecoveryEvent(cameraId: string, outcome: "success" | "failure", detail: string): void {
+  const event = { cameraId, at: new Date().toISOString(), outcome, detail };
+  recoveryEvents.push(event);
+  if (recoveryEvents.length > 100) recoveryEvents.shift();
+  appendPersistentRecoveryEvent(event);
+  try {
+    const previous = incidentResolutions[cameraId];
+    if (outcome === "failure" && previous && Date.parse(previous.lastFailureAt) < Date.parse(event.at)) {
+      appendRecoveryAudit({ type: "reopened", cameraId, at: event.at, detail: "New failed recovery after operator resolution" });
+      // Delete stale resolution to avoid duplicate reopen events.
+      const next = { ...incidentResolutions }; delete next[cameraId];
+      saveIncidentResolutions(next); incidentResolutions = next;
+    }
+    appendRecoveryAudit({ type: outcome === "failure" ? "failure" : "success", cameraId, at: event.at, detail });
+  } catch (error) { console.error("Recovery audit persistence failed:", error); }
+}
+function hasActiveYoutubeRelay(cameraId: string): boolean {
+  return youtubeStreams.list().some(stream => stream.cameraId === cameraId);
+}
 function recoveryEligibility(cameraId: string): { allowed: boolean; reason?: string } {
   if (recoveringCaptures.has(cameraId) || previewBusy.has(cameraId)) return { allowed: false, reason: "Camera operation in progress" };
+  if (hasActiveYoutubeRelay(cameraId)) return { allowed: false, reason: "Active YouTube stream: stop streaming before restarting capture" };
+  if (!cameraCaptureManager.get(cameraId)?.capture.isRunning) return { allowed: false, reason: "No active capture to restart" };
   const now = Date.now();
   const attempts = (recoveryAttempts.get(cameraId) ?? []).filter(t => now - t < RECOVERY_WINDOW_MS);
   recoveryAttempts.set(cameraId, attempts);
@@ -1076,18 +1094,23 @@ async function recoverCapture(cameraId: string): Promise<string> {
   recoveryAttempts.set(cameraId, [...(recoveryAttempts.get(cameraId) ?? []), Date.now()]);
   const wasPreviewing = !!previewSessionManager.get(cameraId);
   try {
-    await youtubeStreams.stop(cameraId);
+    // Do not terminate an audience-facing stream as a side effect of recovery.
+    if (hasActiveYoutubeRelay(cameraId)) throw new Error("Active YouTube stream: recovery cancelled");
     await cameraCaptureManager.stop(cameraId);
     recordingGrowth.delete(cameraId);
     const mic = await resolveMicrophone(cameraId, managed.microphoneName);
-    const restarted = await cameraCaptureManager.start(cameraId, managed.cameraName, cameraId,
-      mic.input, recordingDirectory(outputDirectory, cameraId));
-    const message = `New recording: ${restarted.recordingPath}. Restart YouTube manually.`;
+    const restarted = await cameraCaptureManager.start(cameraId, managed.cameraName, managed.cameraDeviceId,
+      mic.input, recordingDirectory(outputDirectory, cameraId), managed.recordingEnabled);
+    const message = managed.recordingEnabled
+      ? `Capture restarted. New recording: ${restarted.recordingPath}. Streaming remains stopped.`
+      : "Capture restarted with local recording still disabled. Streaming remains stopped.";
+    appendRecoveryEvent(cameraId, "success", message);
     recoveryMessages.set(cameraId, message);
     return message;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recoveryMessages.set(cameraId, `Recovery failed: ${message}`);
+    appendRecoveryEvent(cameraId, "failure", message);
     if (wasPreviewing && !cameraCaptureManager.get(cameraId)) {
       try { await previewProcessManager.start(cameraId); } catch { /* keep original failure */ }
     }
@@ -1097,13 +1120,155 @@ async function recoverCapture(cameraId: string): Promise<string> {
     recoveringCaptures.delete(cameraId);
   }
 }
+app.get("/api/captures/recovery-policy", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json(recoveryPolicy);
+});
+app.put("/api/captures/recovery-policy", (req, res) => {
+  const body = req.body as Record<string, unknown> | undefined;
+  if (!body || typeof body.enabled !== "boolean" ||
+      !Number.isInteger(body.unhealthyChecks) || Number(body.unhealthyChecks) < 3 || Number(body.unhealthyChecks) > 12 ||
+      !Number.isInteger(body.minimumCaptureAgeSeconds) || Number(body.minimumCaptureAgeSeconds) < 30 || Number(body.minimumCaptureAgeSeconds) > 600) {
+    res.status(400).json({ error: "Invalid policy. Checks must be 3-12 and capture age 30-600 seconds." });
+    return;
+  }
+  const next = { enabled: body.enabled, unhealthyChecks: Number(body.unhealthyChecks),
+    minimumCaptureAgeSeconds: Number(body.minimumCaptureAgeSeconds), protectedStreams: true as const };
+  try {
+    saveRecoveryPolicy(next);
+    recoveryPolicy = next;
+    unhealthySamples.clear();
+    res.json(recoveryPolicy);
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
 app.get("/api/captures/recovery-status", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json({ automaticEnabled: AUTO_RECOVERY, cooldownMinutes: 5, maxAttemptsPerHour: 2,
+  res.json({ automaticEnabled: recoveryPolicy.enabled, cooldownMinutes: 5, maxAttemptsPerHour: 2,
     cameras: cameraCaptureManager.list().map(item => ({ cameraId: item.cameraId,
       ...recoveryEligibility(item.cameraId),
-      attemptsInLastHour: (recoveryAttempts.get(item.cameraId) ?? []).length,
+      attemptsInLastHour: (recoveryAttempts.get(item.cameraId) ?? []).filter(t => Date.now() - t < RECOVERY_WINDOW_MS).length,
+      cooldownRemainingMs: Math.max(0, RECOVERY_COOLDOWN_MS - (Date.now() - ((recoveryAttempts.get(item.cameraId) ?? []).at(-1) ?? 0))),
+      streaming: hasActiveYoutubeRelay(item.cameraId),
+      restarting: recoveringCaptures.has(item.cameraId),
+      recordingEnabled: item.recordingEnabled,
       lastResult: recoveryMessages.get(item.cameraId) ?? null })) });
+});
+app.get("/api/captures/recovery-events", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ events: recoveryEvents.slice().reverse().map(event => ({ ...event, acknowledgedAt: recoveryAcknowledgements[recoveryEventKey(event)] ?? null })) });
+});
+// Step 122: read-only persistent operator audit timeline.
+// Shared warning thresholds are informational; changing them cannot restart captures.
+app.get("/api/captures/reliability-rules", async (_req, res) => {
+  try { res.setHeader("Cache-Control", "no-store"); res.json(await readVersionedRecoveryReliabilityRules()); }
+  catch (error) { res.status(500).json({ error: String(error) }); }
+});
+app.get("/api/captures/reliability-rules/history", async (_req, res) => {
+  try { res.setHeader("Cache-Control", "no-store"); res.json({ changes: await readRecoveryReliabilityRuleHistory() }); }
+  catch (error) { res.status(500).json({ error: String(error) }); }
+});
+app.put("/api/captures/reliability-rules", async (req, res) => {
+  try { res.json(await saveVersionedRecoveryReliabilityRules(req.body?.rules, req.body?.version, typeof req.headers["x-operator-note"] === "string" ? decodeURIComponent(req.headers["x-operator-note"]) : "")); }
+  catch (error) { if (error instanceof ReliabilityRuleConflict) res.status(409).json({ error: error.message, ...error.current }); else res.status(400).json({ error: String(error) }); }
+});
+app.post("/api/captures/reliability-rules/restore", async (req, res) => {
+  try { res.json(await restoreRecoveryReliabilityRules(req.body?.changeId, req.body?.snapshot, req.body?.version)); }
+  catch (error) { if (error instanceof ReliabilityRuleConflict) res.status(409).json({ error: error.message, ...error.current }); else res.status(400).json({ error: String(error) }); }
+});
+// Shared, persistent recovery warning transitions and operator reviews.
+app.get("/api/captures/reliability-warnings", async (_req, res) => {
+  try { res.setHeader("Cache-Control", "no-store"); res.json({ events: await readSharedWarnings() }); }
+  catch (error) { res.status(500).json({ error: String(error) }); }
+});
+app.post("/api/captures/reliability-warnings", async (req, res) => {
+  try { const event = await addSharedWarning(req.body); res.status(201).json({ event }); }
+  catch (error) { res.status(400).json({ error: String(error) }); }
+});
+app.post("/api/captures/reliability-warnings/acknowledge", async (req, res) => {
+  try { const event = await acknowledgeSharedWarning(req.body?.key, req.body?.note); res.json({ event }); }
+  catch (error) { res.status(400).json({ error: String(error) }); }
+});
+app.get("/api/captures/recovery-audit", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ events: readRecoveryAudit().slice().reverse() });
+});
+// Step 120: read-only repeated-failure escalation. No automated restart is triggered.
+// Uses the persisted, bounded recovery audit log so escalation survives backend restarts.
+app.get("/api/captures/recovery-escalations", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000;
+  const threshold = 3;
+  const grouped = new Map<string, typeof recoveryEvents>();
+  for (const event of recoveryEvents) {
+    if (event.outcome !== "failure") continue;
+    const at = Date.parse(event.at);
+    if (!Number.isFinite(at) || at > now || now - at > windowMs) continue;
+    const entries = grouped.get(event.cameraId) ?? [];
+    entries.push(event);
+    grouped.set(event.cameraId, entries);
+  }
+  const escalations = [...grouped.entries()].filter(([, entries]) => entries.length >= threshold)
+    .map(([cameraId, entries]) => ({
+      cameraId, severity: "critical" as const, failuresInWindow: entries.length,
+      firstFailureAt: entries[0].at, lastFailureAt: entries[entries.length - 1].at,
+      unacknowledgedFailures: entries.filter(event => !recoveryAcknowledgements[recoveryEventKey(event)]).length,
+      latestDetail: entries[entries.length - 1].detail,
+      incidentStatus: incidentResolutions[cameraId] && Date.parse(incidentResolutions[cameraId].lastFailureAt) >= Date.parse(entries[entries.length - 1].at) ? "resolved" as const : "open" as const,
+      resolvedAt: incidentResolutions[cameraId]?.resolvedAt ?? null,
+      resolutionNote: incidentResolutions[cameraId]?.note ?? null
+    })).sort((a, b) => b.failuresInWindow - a.failuresInWindow);
+  res.json({ checkedAt: new Date(now).toISOString(), windowMinutes: 60, threshold, escalations });
+});
+// Resolution is administrative. A later failure reopens the incident automatically.
+app.post("/api/captures/recovery-incidents/:cameraId/resolve", (req, res) => {
+  const cameraId = req.params.cameraId;
+  const note = (req.body as { note?: unknown } | undefined)?.note;
+  if (typeof note !== "string" || !note.trim() || note.length > 500) {
+    res.status(400).json({ error: "A resolution note of 1-500 characters is required." }); return;
+  }
+  const now = Date.now();
+  const failures = recoveryEvents.filter(event => event.cameraId === cameraId && event.outcome === "failure" &&
+    Number.isFinite(Date.parse(event.at)) && Date.parse(event.at) <= now && now - Date.parse(event.at) <= 3600000);
+  if (failures.length < 3) { res.status(409).json({ error: "Camera has no current critical escalation." }); return; }
+  const lastFailureAt = failures[failures.length - 1].at;
+  const resolution = { lastFailureAt, resolvedAt: new Date().toISOString(), note: note.trim() };
+  try {
+    const next = { ...incidentResolutions, [cameraId]: resolution };
+    saveIncidentResolutions(next);
+    incidentResolutions = next;
+    try { appendRecoveryAudit({ type: "resolved", cameraId, at: resolution.resolvedAt, detail: resolution.note }); }
+    catch (error) { console.error("Recovery resolution audit write failed:", error); }
+    res.json({ cameraId, incidentStatus: "resolved", ...resolution });
+  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+// Only failures already present in the audit log can be acknowledged.
+app.post("/api/captures/recovery-events/acknowledge", (req, res) => {
+  const keys = (req.body as { keys?: unknown } | undefined)?.keys;
+  if (!Array.isArray(keys) || keys.length === 0 || keys.length > 100 || !keys.every(key => typeof key === "string" && key.length < 500)) {
+    res.status(400).json({ error: "Provide 1-100 recovery event keys." }); return;
+  }
+  const failures = new Set(recoveryEvents.filter(event => event.outcome === "failure").map(recoveryEventKey));
+  if (keys.some(key => !failures.has(key))) { res.status(404).json({ error: "One or more recovery failures were not found." }); return; }
+  const updated = { ...recoveryAcknowledgements };
+  const timestamp = new Date().toISOString();
+  const newlyAcknowledged = keys.filter(key => !updated[key]);
+  for (const key of keys) updated[key] ??= timestamp;
+  // Keep acknowledgements only for retained audit events.
+  const retained = new Set(recoveryEvents.map(recoveryEventKey));
+  for (const key of Object.keys(updated)) if (!retained.has(key)) delete updated[key];
+  try {
+    saveRecoveryAcknowledgements(updated); recoveryAcknowledgements = updated;
+    for (const key of newlyAcknowledged) {
+      const event = recoveryEvents.find(item => recoveryEventKey(item) === key);
+      if (event) { try { appendRecoveryAudit({ type: "acknowledged", cameraId: event.cameraId, at: timestamp, detail: `Failure at ${event.at} acknowledged` }); }
+        catch (error) { console.error("Recovery acknowledgement audit write failed:", error); } }
+    }
+    res.json({ success: true, acknowledged: keys.length });
+  }
+  catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 app.post("/api/captures/:cameraId/recover", async (req, res) => {
   try {
@@ -1117,8 +1282,8 @@ app.post("/api/captures/:cameraId/recover", async (req, res) => {
 // Opt-in watchdog: requires three consecutive unhealthy samples, sampled 10 seconds
 // apart. Never interrupts an active YouTube relay automatically.
 let watchdogBusy = false;
-if (AUTO_RECOVERY) {
-  setInterval(async () => {
+setInterval(async () => {
+    if (!recoveryPolicy.enabled) return;
     if (watchdogBusy) return;
     watchdogBusy = true;
     try {
@@ -1128,7 +1293,7 @@ if (AUTO_RECOVERY) {
       for (const id of unhealthySamples.keys()) if (!activeIds.has(id)) unhealthySamples.delete(id);
       for (const item of active) {
         const age = now - new Date(item.startedAt).getTime();
-        if (age < 30000) { unhealthySamples.delete(item.cameraId); continue; }
+        if (age < recoveryPolicy.minimumCaptureAgeSeconds * 1000) { unhealthySamples.delete(item.cameraId); continue; }
         const stats = item.capture.getFrameStats();
         const size = await item.capture.getRecordingFileSize().catch(() => null);
         const previous = recordingGrowth.get(item.cameraId);
@@ -1136,7 +1301,7 @@ if (AUTO_RECOVERY) {
           (size === null || (!!previous && now - previous.lastGrowthAt > 20000));
         const samples = stalled ? (unhealthySamples.get(item.cameraId) ?? 0) + 1 : 0;
         unhealthySamples.set(item.cameraId, samples);
-        if (samples < 3 || !recoveryEligibility(item.cameraId).allowed) continue;
+        if (samples < recoveryPolicy.unhealthyChecks || !recoveryEligibility(item.cameraId).allowed) continue;
         // Active streams must never be terminated by the unattended watchdog.
         if (youtubeStreams.list().some(stream => stream.cameraId === item.cameraId)) continue;
         unhealthySamples.set(item.cameraId, 0);
@@ -1146,7 +1311,6 @@ if (AUTO_RECOVERY) {
     } catch (error) { console.error("Recovery watchdog error:", error); }
     finally { watchdogBusy = false; }
   }, 10000);
-}
 
 // Probe a connected, idle camera only. DirectShow probing can fail when the
 // camera is already opened by another process.
@@ -1227,6 +1391,17 @@ app.get("/api/capture-quality", (_req, res) => {
   res.json(getCaptureQualitySettings());
 });
 
+// Step 105: passive local signal diagnostics, using existing camera captures.
+// This endpoint does not verify the YouTube viewer-side playback.
+app.get("/api/captures/signal-diagnostics", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ checkedAt: new Date().toISOString(), scope: "local-capture",
+    captures: cameraCaptureManager.list().map(item => ({
+      cameraId: item.cameraId, cameraName: item.cameraName,
+      ...item.capture.getSignalDiagnostics()
+    })) });
+});
+
 app.get("/api/captures", async (_req, res) => {
   const captures = await Promise.all(cameraCaptureManager.list().map(async (managed) => {
     const frameStats = managed.capture.getFrameStats();
@@ -1237,7 +1412,6 @@ const recordingFileSize = await managed.capture.getRecordingFileSize();
       cameraName: managed.cameraName,
       microphoneName: managed.microphoneName,
       recordingPath: managed.recordingPath,
-      recordingEnabled: managed.recordingEnabled,
       selectedMode: managed.selectedMode ?? null,
       configuredQuality: managed.configuredQuality ?? null,
       running: managed.capture.isRunning,
@@ -1266,7 +1440,7 @@ const recordingFileSize = await managed.capture.getRecordingFileSize();
 
 
 app.post("/api/captures/start", async (req, res) => {
-  const { cameraId, cameraName, cameraDeviceId, microphoneName, microphoneId, recordingEnabled } = req.body ?? {};
+  const { cameraId, cameraName, cameraDeviceId, microphoneName, microphoneId } = req.body ?? {};
 
   if (
     typeof cameraId !== "string" ||
@@ -1292,15 +1466,14 @@ app.post("/api/captures/start", async (req, res) => {
   const wasPreviewing = !!previewSessionManager.get(cameraId);
   try {
     if (wasPreviewing) await previewProcessManager.stop(cameraId);
-    if (recordingEnabled !== false) await assertRecordingSpace();
+    await assertRecordingSpace();
     const resolvedMic = await resolveMicrophone(cameraId, microphoneName, microphoneId);
     const managed = await cameraCaptureManager.start(
   cameraId,
   cameraName,
   cameraDeviceId,
   resolvedMic.input,
-  recordingDirectory(outputDirectory, cameraId),
-  recordingEnabled !== false
+  recordingDirectory(outputDirectory, cameraId)
     );
 
     res.json({
@@ -2004,10 +2177,72 @@ app.post("/api/recordings/:cameraId/stop", async (req, res) => {
   }
 });
 
-const host = getNetworkBindAddress();
-app.listen(PORT, host, () => {
-  console.log("");
-  console.log("Tournament Streaming API");
-  console.log(`http://127.0.0.1:${PORT}`);
-  console.log("");
+// The loopback listener is never dependent on Tailscale or LAN configuration.
+// Remote binding is a second, optional listener on the same application.
+type RemoteListenerStatus = { state: "disabled" | "listening" | "unavailable" | "starting"; address: string | null; message: string };
+let remoteListenerStatus: RemoteListenerStatus = { state: "disabled", address: null, message: "Remote access is disabled." };
+// This endpoint reports the listener's actual runtime state, not merely saved settings.
+app.get("/api/network/status", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ local: { available: true, address: `127.0.0.1:${PORT}` }, remote: remoteListenerStatus });
 });
+let remoteServer: Server | null = null;
+const localServer = app.listen(PORT, "127.0.0.1", () => {
+  console.log(`[Network] Local API listening: http://127.0.0.1:${PORT}`);
+  startOptionalRemoteListener();
+});
+localServer.on("error", error => {
+  console.error("[Network] Local API listener failed:", error);
+});
+
+function startOptionalRemoteListener(): void {
+  let address: string;
+  try { address = getNetworkBindAddress(); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    remoteListenerStatus = { state: "unavailable", address: null, message: reason };
+    console.warn(`[Network] Remote access unavailable: ${reason}`);
+    console.info("[Network] Local dashboard remains available.");
+    return;
+  }
+  if (address === "127.0.0.1") {
+    remoteListenerStatus = { state: "disabled", address: null, message: "Remote access is disabled in settings." };
+    return;
+  }
+  if ((process.env.TOURNAMENT_ADMIN_PASSWORD || "").length < 12) {
+    const message = "Set TOURNAMENT_ADMIN_PASSWORD to at least 12 characters before enabling remote access.";
+    remoteListenerStatus = { state: "unavailable", address, message };
+    console.warn(`[Network] Remote access unavailable: ${message}`);
+    console.info("[Network] Local dashboard remains available.");
+    return;
+  }
+  const available = Object.values(networkInterfaces()).flat().some(iface => iface?.address === address);
+  if (!available) {
+    const message = `Network interface ${address} is not available on this computer.`;
+    remoteListenerStatus = { state: "unavailable", address, message };
+    console.warn(`[Network] Remote access unavailable: ${message}`);
+    console.info("[Network] Local dashboard remains available.");
+    return;
+  }
+  try {
+    remoteListenerStatus = { state: "starting", address, message: "Starting remote listener." };
+    const server = app.listen(PORT, address);
+    remoteServer = server;
+    server.on("listening", () => {
+      remoteListenerStatus = { state: "listening", address, message: `Remote API listening on ${address}:${PORT}.` };
+      console.log(`[Network] Remote API: http://${address}:${PORT}`);
+    });
+    server.on("error", error => {
+      const message = error instanceof Error ? error.message : String(error);
+      remoteListenerStatus = { state: "unavailable", address, message };
+      console.warn(`[Network] Remote listener unavailable: ${message}`);
+      console.info("[Network] Local dashboard remains available.");
+      if (remoteServer === server) remoteServer = null;
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    remoteListenerStatus = { state: "unavailable", address, message };
+    console.warn(`[Network] Remote listener unavailable: ${message}`);
+    console.info("[Network] Local dashboard remains available.");
+  }
+}

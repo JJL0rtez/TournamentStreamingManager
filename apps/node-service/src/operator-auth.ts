@@ -4,10 +4,10 @@ import { getNetworkBindAddress } from "./persistent-settings.js";
 
 // Configure a strong password in the server environment. No default password.
 const password = process.env.TOURNAMENT_ADMIN_PASSWORD || "";
-const remoteEnabled = getNetworkBindAddress() !== "127.0.0.1";
-if (remoteEnabled && password.length < 12) {
-  throw new Error("Remote API requires TOURNAMENT_ADMIN_PASSWORD (12+ characters)");
-}
+// Remote access is disabled, rather than crashing startup, if no strong password is configured.
+let remoteEnabled = false;
+try { remoteEnabled = getNetworkBindAddress() !== "127.0.0.1" && password.length >= 12; }
+catch { /* The optional listener reports configuration errors once at startup. */ }
 const salt = crypto.randomBytes(32);
 const passwordDigest = password ? crypto.scryptSync(password, salt, 64) : null;
 const grants = new Map<string, number>();
