@@ -1,0 +1,33 @@
+.ts-display{padding:2vw;color:white;background:#050505;min-height:75vh}.ts-display h1{text-align:center;font-size:clamp(32px,4vw,72px)}.ts-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:1vw;align-items:start}.ts-tables table{width:100%;border-collapse:collapse;background:#f8fafc;color:#101828;font-size:clamp(13px,1.4vw,26px)}.ts-tables th{background:#173d66;color:white;padding:12px}.ts-tables .ts-subheading{background:#315c84;font-size:.8em}.ts-tables td{padding:8px 10px;border:1px solid #8c9eae}.ts-tables td:last-child{white-space:nowrap;text-align:right}.ts-tables tr:nth-child(even){background:#dce6ef}.ts-message{font-size:clamp(28px,4vw,70px);text-align:center;white-space:pre-wrap}.ts-editor{background:#16253a;color:white;padding:18px;margin:14px 0}.ts-editor label{display:grid;gap:5px;margin:8px 0}.ts-editor input:not([type=checkbox]),.ts-editor textarea{padding:8px;max-width:100%;color:#111}.ts-editor button{padding:8px;margin:4px;background:#30547d;color:white;border:1px solid #7792ae;border-radius:5px}.ts-edit-slide{border:1px solid #8295a9;padding:12px;margin:12px 0}.ts-edit-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.ts-edit-table{border:1px solid #8295a9;padding:12px}.ts-row{display:grid;grid-template-columns:2fr 1fr auto;gap:6px}.ts-row input{min-width:0}
+/* High-contrast display based on the original tournament assignment board. */
+.ts-display{background:#050505;color:#fff;min-height:calc(100vh - 110px);padding:1.2vw 1.5vw;box-sizing:border-box}
+.ts-branding{display:flex;align-items:center;justify-content:center;gap:1.4vw;min-height:105px;margin-bottom:1.5vw}
+.ts-brand-left{display:flex;gap:.5vw;align-items:center;margin-right:auto}.ts-brand-lines{text-align:center;flex:1;line-height:1.08;font-size:clamp(26px,3.3vw,68px);font-weight:800}.ts-brand-lines>div+div{font-size:1.18em}.ts-logo{max-width:10vw;max-height:100px;object-fit:contain}
+.ts-tables{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.2vw;align-items:start}
+.ts-tables table{table-layout:fixed;background:#353535;color:#fff;font-size:inherit;width:100%;border-collapse:collapse}
+.ts-tables th{background:#696969;color:#fff;font-size:1.4em;text-align:center;padding:.5em .25em;font-weight:800}
+.ts-tables td{background:#454545;border:2px solid #858585;padding:.34em .45em;line-height:1.16;font-weight:600;overflow-wrap:anywhere}
+.ts-tables tr:nth-child(even) td{background:#565656}.ts-tables td:first-child{width:77%}.ts-tables td:last-child{width:23%;white-space:nowrap;text-align:center}
+.ts-brand-editor{border:1px solid #8295a9;margin:12px 0;padding:12px}.ts-brand-edit-row{display:flex;gap:8px;align-items:center}.ts-brand-edit-row input:first-child{flex:1;min-width:0}.ts-brand-edit-row input[type=color]{width:55px;height:38px;padding:2px}
+
+/* Fullscreen is a black, borderless canvas, regardless of the dashboard theme. */
+.presentation-root.presentation-fullscreen,.presentation-fullscreen .presentation-content,.presentation-fullscreen .ts-display{background:#000!important;border:0!important;outline:0!important;box-shadow:none!important;margin:0!important}
+.presentation-root.presentation-fullscreen{position:fixed;inset:0;z-index:99999;width:100vw;height:100vh;overflow:hidden}
+.presentation-fullscreen .presentation-content{width:100%;height:100%;padding:0!important}
+.presentation-fullscreen .ts-display{width:100%;height:100%;min-height:100%;overflow:hidden}
+.ts-tables{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:minmax(0,auto);align-items:start;gap:1.1vw}
+.ts-tables table{max-width:100%;min-width:0}
+.ts-logo{max-width:none;max-height:180px;object-fit:contain;flex-shrink:0}
+.ts-logo-control{display:grid;grid-template-columns:minmax(110px,1fr) minmax(150px,2fr) repeat(3,minmax(85px,1fr));gap:8px;align-items:center;padding:8px;border:1px solid #546579;margin:8px 0}
+.ts-logo-control label{margin:0}.ts-logo-control input{width:100%}.ts-logo-control select{min-width:0;padding:8px}
+.ts-table-placement{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.ts-table-placement select{padding:8px;width:100%}
+html:has(.presentation-fullscreen),body:has(.presentation-fullscreen),#root:has(.presentation-fullscreen){background:#000!important;border:0!important;outline:0!important;box-shadow:none!important;margin:0!important;padding:0!important}
+
+/* Title-centred branding: left-of-title stays beside the title, never at viewport edge. */
+.ts-branding{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,3fr) minmax(0,1fr);align-items:center;gap:1vw}
+.ts-brand-left{justify-self:start;margin-right:0;min-width:0;max-width:100%;flex-wrap:wrap}
+.ts-brand-center{grid-column:2;display:flex;align-items:center;justify-content:center;gap:1vw;min-width:0}
+.ts-brand-lines{flex:0 1 auto;min-width:0;text-align:center}
+.ts-brand-clock{grid-column:3;justify-self:end;white-space:nowrap;color:#fff;font-size:clamp(18px,2vw,38px);font-weight:700;font-variant-numeric:tabular-nums}
+@media(max-width:900px){.ts-branding{grid-template-columns:1fr 3fr 1fr}.ts-brand-clock{font-size:clamp(14px,1.8vw,24px)}}

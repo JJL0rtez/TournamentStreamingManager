@@ -1,0 +1,142 @@
+{
+  "revision": 14,
+  "slides": [
+    {
+      "id": "6fe756df-12ce-4d80-8abf-23248c185dad",
+      "title": "Ring Assignments",
+      "duration": 5,
+      "kind": "schedule",
+      "tables": [
+        {
+          "heading": "Tatami 3",
+          "subheading": "",
+          "rowSpan": 1,
+          "rows": [
+            {
+              "event": "Women's 18+ BB - Forms",
+              "time": "9:00am"
+            },
+            {
+              "event": "Sparring",
+              "time": "2:00pm"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "10:00am"
+            },
+            {
+              "event": "11-12 Novice",
+              "time": "11:00am"
+            },
+            {
+              "event": "15-17 Intermediate",
+              "time": "12:00pm"
+            },
+            {
+              "event": "Womens 18+ Advance",
+              "time": "1:00pm"
+            },
+            {
+              "event": "   ",
+              "time": "   "
+            },
+            {
+              "event": "   ",
+              "time": "   "
+            }
+          ]
+        },
+        {
+          "heading": "Tatami 4",
+          "subheading": "Divisions",
+          "rowSpan": 1,
+          "rows": [
+            {
+              "event": "Vet Men 35+ BB",
+              "time": "9:00am"
+            },
+            {
+              "event": "Vet Men 42+ BB",
+              "time": "9:00am"
+            },
+            {
+              "event": "7-8 Advance",
+              "time": "10:00am"
+            },
+            {
+              "event": "11-12 Intermediate",
+              "time": "11:00am"
+            },
+            {
+              "event": "15-17 Advanced",
+              "time": "1:00pm"
+            },
+            {
+              "event": "Musical Form/Weapon C-Belt",
+              "time": "2:00pm"
+            },
+            {
+              "event": "Vet Men 35+ BB - Forms",
+              "time": "2:00pm"
+            },
+            {
+              "event": "Vet Men 42+ BB - Forms",
+              "time": "2:00pm"
+            }
+          ]
+        }
+      ],
+      "body": ""
+    },
+    {
+      "id": "4b365998-627c-45d8-aa69-42560a085f33",
+      "title": "Ring Assignments",
+      "duration": 20,
+      "kind": "schedule",
+      "tables": [
+        {
+          "heading": "Ring 1",
+          "subheading": "Divisions",
+          "rowSpan": 1,
+          "rows": [
+            {
+              "event": "sssss",
+              "time": "sds"
+            },
+            {
+              "event": "sadsad",
+              "time": "ssss"
+            }
+          ]
+        }
+      ],
+      "body": ""
+    }
+  ],
+  "branding": {
+    "lines": [
+      {
+        "text": "STK Master of the Ring",
+        "color": "#ffffff"
+      },
+      {
+        "text": "Ring Assignments",
+        "color": "#ffc505"
+      }
+    ],
+    "leftLogos": [
+      "/api/billboard/assets/023814dd-70cd-4332-90a3-4c4293cba27b.png"
+    ],
+    "titleLeftLogo": "/api/billboard/assets/023814dd-70cd-4332-90a3-4c4293cba27b.png",
+    "titleRightLogo": "/api/billboard/assets/047afcee-60ae-4908-9d44-15dd2f36b9ce.png",
+    "logoSettings": {}
+  },
+  "rotation": {
+    "enabled": true,
+    "cameraSeconds": 20,
+    "motionThreshold": 12,
+    "sponsorEvery": 0,
+    "sponsorVideos": [],
+    "blacklist": []
+  }
+}

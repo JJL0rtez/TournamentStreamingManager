@@ -1,3 +1,5 @@
+import {useTournamentSlides,ScheduleSlides,ScheduleEditor,RotationEditor} from "./TournamentSlides";
+import {CameraRotation,readDisplayConfig,type DisplayConfig} from "./TournamentDisplayExtras";
 import {useEffect,useRef,useState} from "react";
 import "./Presentation.css";
 
@@ -21,12 +23,16 @@ const templates:Slide[]=[
  {id:"",title:"Awards Ceremony",body:"Awards will be announced at the conclusion of the division.",duration:12,kind:"announcement",theme:"gold"}
 ];
 export default function Presentation(){
+ const {doc:sharedDisplays,save:saveSharedDisplays,message:sharedStatus}=useTournamentSlides();
  const [session,setSession]=useState<Session|null>(null);
  const [status,setStatus]=useState("Connecting to tournament service...");
  const [board,setBoard]=useState<Board>(readBoard);
  const [index,setIndex]=useState(0);
- const [mode,setMode]=useState<"rings"|"billboard">(()=>new URLSearchParams(location.search).get("mode")==="billboard"?"billboard":"rings");
+ const [mode,setMode]=useState<"schedule"|"cameras">(()=>new URLSearchParams(location.search).get("mode")==="cameras"?"cameras":"schedule");
  const [editing,setEditing]=useState(false);
+ const [scheduleEditing,setScheduleEditing]=useState(false);
+ const [rotationEditing,setRotationEditing]=useState(false);
+ const [extraConfig,setExtraConfig]=useState<DisplayConfig>(readDisplayConfig);
  const [fullscreen,setFullscreen]=useState(false);
  const [syncStatus,setSyncStatus]=useState("Connecting...");
  const [revision,setRevision]=useState(0);
@@ -58,7 +64,6 @@ export default function Presentation(){
  useEffect(()=>{let alive=true;const load=async()=>{try{const r=await fetch("/api/billboard",{cache:"no-store"});if(!r.ok)throw Error(`HTTP ${r.status}`);const v=await r.json();if(alive){if(!pendingSave.current && v.revision>=currentRevision.current){setBoard(v.board);setRevision(v.revision);currentRevision.current=v.revision;setSyncStatus("Shared with tournament server");}}}catch(e){if(alive)setSyncStatus(`Local-only: ${String(e)}`);}};void load();const timer=setInterval(()=>void load(),5000);return()=>{alive=false;clearInterval(timer);};},[]);
  useEffect(()=>{void refreshAssets();void refreshPresets();},[]);
  useEffect(()=>{const onStorage=(e:StorageEvent)=>{if(e.key===KEY)setBoard(readBoard());};window.addEventListener("storage",onStorage);return()=>window.removeEventListener("storage",onStorage);},[]);
- useEffect(()=>{if(mode!=="billboard"||editing||paused||board.slides.length<2)return;const current=board.slides[index%board.slides.length];const timer=setTimeout(()=>setIndex(i=>(i+1)%board.slides.length),Math.max(3,Math.min(120,current.duration||10))*1000);return()=>clearTimeout(timer);},[board,index,mode,editing,paused]);
  useEffect(()=>{const onChange=()=>setFullscreen(!!document.fullscreenElement);document.addEventListener("fullscreenchange",onChange);return()=>document.removeEventListener("fullscreenchange",onChange);},[]);
  function update(next:Slide[]){
   const b={slides:next,updatedAt:Date.now()};
@@ -76,7 +81,6 @@ export default function Presentation(){
  function chooseLayout(next:Layout){setLayout(next);try{localStorage.setItem(SETTINGS_KEY,next);}catch{}}
  function exportSlides(){const blob=new Blob([JSON.stringify({format:"tournament-billboard-v1",slides:board.slides},null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="tournament-billboard.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
  async function importSlides(file:File){try{if(file.size>100_000)throw Error("File exceeds 100 KB");const data=JSON.parse(await file.text());if(data.format!=="tournament-billboard-v1"||!Array.isArray(data.slides)||data.slides.length>100)throw Error("Unsupported slide file");const slides:Slide[]=data.slides.map((x:unknown,i:number)=>{if(!x||typeof x!=="object")throw Error(`Invalid slide ${i+1}`);const v=x as Record<string,unknown>;if(typeof v.id!=="string"||!v.id||v.id.length>100||typeof v.title!=="string"||v.title.length>100||typeof v.body!=="string"||v.body.length>400||!(["announcement","sponsor","schedule"] as unknown[]).includes(v.kind)||!Number.isInteger(v.duration)||Number(v.duration)<3||Number(v.duration)>120)throw Error(`Invalid slide ${i+1}`);if(v.imageUrl!==undefined&&(typeof v.imageUrl!=="string"||!imageAllowed(v.imageUrl)))throw Error(`Invalid image URL ${i+1}`);if(v.theme!==undefined&&!["default","blue","gold","dark"].includes(String(v.theme)))throw Error(`Invalid theme ${i+1}`);return {id:v.id,title:v.title,body:v.body,kind:v.kind as Slide["kind"],duration:v.duration as number,imageUrl:v.imageUrl as string|undefined,theme:v.theme as Slide["theme"]};});if(new Set(slides.map(x=>x.id)).size!==slides.length)throw Error("Duplicate slide IDs");if(!confirm(`Replace current billboard with ${slides.length} imported slides?`))return;await update(slides);setMessage(`Imported ${slides.length} slides`);}catch(e){setMessage(`Import failed: ${String(e)}`);}}
- useEffect(()=>{const handler=(e:KeyboardEvent)=>{const target=e.target as HTMLElement|null;if(target?.closest("input,textarea,select,[contenteditable=true]"))return;if(e.key==="ArrowRight"&&mode==="billboard"){e.preventDefault();setIndex(i=>(i+1)%Math.max(1,board.slides.length));}else if(e.key==="ArrowLeft"&&mode==="billboard"){e.preventDefault();setIndex(i=>(i+board.slides.length-1)%Math.max(1,board.slides.length));}else if(e.code==="Space"&&mode==="billboard"){e.preventDefault();setPaused(p=>!p);}else if(e.key.toLowerCase()==="f"&&!e.ctrlKey&&!e.metaKey){e.preventDefault();void(document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen());}};window.addEventListener("keydown",handler);return()=>window.removeEventListener("keydown",handler);},[mode,board.slides.length]);
  const slides=board.slides;const current=slides[index%slides.length];
  async function exportTournamentBundle(){
   try{
@@ -116,61 +120,24 @@ export default function Presentation(){
    const saved=await r.json();setBoard(saved.board);setRevision(saved.revision);chooseLayout(bundle.layout);setShowClock(bundle.showClock);setSession((await sessionResponse.json()).session);setMessage("Tournament bundle applied. Check camera and microphone assignments before starting streams.");bundleRef.current=null;setBundlePreview(null);
   }catch(e){setMessage(`Apply failed: ${String(e)}`);}
  }
- return <div className="presentation-root">
-  <nav className="presentation-toolbar" aria-label="Presentation controls">
+ return <div className={`presentation-root ${fullscreen?"presentation-fullscreen":""}`}>
+  {!fullscreen&&<nav className="presentation-toolbar" aria-label="Presentation controls">
    <a href="/">Dashboard</a>
-   <button onClick={()=>{setMode("rings");history.replaceState(null,"","/presentation?mode=rings");}}>Ring display</button>
-   <button onClick={()=>{setMode("billboard");history.replaceState(null,"","/presentation?mode=billboard");}}>Billboard</button>
-   <button onClick={()=>setEditing(v=>!v)} aria-pressed={editing}>{editing?"Close editor":"Edit billboard"}</button>
+   <button onClick={()=>{setMode("schedule");history.replaceState(null,"","/presentation?mode=schedule");setRotationEditing(false);}}>Ring assignments</button>
+   <button onClick={()=>{setMode("cameras");history.replaceState(null,"","/presentation?mode=cameras");setScheduleEditing(false);}}>Camera display</button>
+   <button onClick={()=>{setMode("schedule");setScheduleEditing(v=>!v);setRotationEditing(false);history.replaceState(null,"","/presentation?mode=schedule");}}>{scheduleEditing?"Close slide editor":"Edit ring assignments"}</button>
+   <button onClick={()=>{setMode("cameras");setRotationEditing(v=>!v);setScheduleEditing(false);history.replaceState(null,"","/presentation?mode=cameras");}}>{rotationEditing?"Close camera settings":"Camera settings"}</button>
    <button onClick={()=>void(fullscreen?document.exitFullscreen():document.documentElement.requestFullscreen())}>{fullscreen?"Exit fullscreen":"Fullscreen"}</button>
    <label>Layout <select aria-label="Presentation layout" value={layout} onChange={e=>chooseLayout(e.target.value as Layout)}><option value="classic">Classic</option><option value="split">Split</option><option value="minimal">Minimal</option></select></label>
    <label><input type="checkbox" checked={showClock} onChange={e=>setShowClock(e.target.checked)}/> Clock</label>
    <span className="presentation-connection">{status} | {syncStatus}</span>
-  </nav>
+  </nav>}
   <div className={`presentation-content presentation-layout-${layout}`}>
-   <header><div className="presentation-event">{session?.eventName||"Tournament"}</div>{showClock&&<time>{new Date(now).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}</time>}</header>
-   {mode==="rings"?<section className="presentation-rings" aria-label="Ring assignments">
-    {(session?.assignments||[]).length?session!.assignments.map((ring,i)=><article key={`${ring.cameraId}-${i}`}><h2>{ring.ring||`Ring ${i+1}`}</h2><p>{ring.cameraName||"Camera not assigned"}</p></article>):<p className="presentation-empty">No ring assignments in the active tournament session.</p>}
-   </section>:<section className={`presentation-slide ${current?.kind||"announcement"} presentation-theme-${current?.theme||"default"}`} aria-live="polite">
-    {current?<><div className="presentation-slide-kind">{current.kind}</div><h1>{current.title}</h1>{current.imageUrl&&imageAllowed(current.imageUrl)&&<img className="presentation-sponsor-image" src={current.imageUrl} alt={current.title} referrerPolicy="no-referrer"/>}<p>{current.body}</p><div className="presentation-counter">{index+1} / {slides.length}</div></>:<h1>No slides configured</h1>}
-   </section>}
+   
+   {mode==="cameras"?(!sharedDisplays.rotation.enabled?<p className="presentation-empty">Camera rotation is off. Enable it under Camera settings.</p>:<CameraRotation cameras={(session?.assignments||[]).filter(x=>x.cameraId&&!sharedDisplays.rotation.blacklist.includes(x.cameraId)).map(x=>({cameraId:x.cameraId,cameraName:x.cameraName,ring:x.ring}))} config={{...extraConfig,...sharedDisplays.rotation}}/>):<ScheduleSlides slides={sharedDisplays.slides} branding={sharedDisplays.branding} showClock={showClock}/>}
+
   </div>
-  {mode==="billboard"&&<div className="presentation-slide-controls"><button onClick={()=>setIndex(i=>(i+slides.length-1)%Math.max(1,slides.length))}>Previous</button><button onClick={()=>setIndex(i=>(i+1)%Math.max(1,slides.length))}>Next</button><button onClick={()=>setPaused(p=>!p)} aria-pressed={paused}>{paused?"Resume rotation":"Pause rotation"}</button></div>}
-  {editing&&<aside className="presentation-editor" aria-label="Billboard editor">
-   <h2>Billboard slides</h2>
-   <section className="presentation-presets"><h3>Complete tournament display bundle</h3>
-    <p>Export or import ring and camera assignments together with billboard slides, layout and clock settings. Stream keys are not included. Applying a bundle requires stopped captures and relays.</p>
-    <button onClick={()=>void exportTournamentBundle()}>Export tournament bundle</button>
-    <label>Import tournament bundle (JSON, up to 1 MB)<input type="file" accept="application/json,.json" onChange={e=>{const file=e.target.files?.[0];if(file)void previewTournamentBundle(file);e.currentTarget.value="";}}/></label>
-    {bundlePreview&&<div className="presentation-bundle-preview"><strong>Ready to import: {bundlePreview.filename}</strong><p>Event: {bundlePreview.eventName} | Rings: {bundlePreview.assignments} | Slides: {bundlePreview.slides}</p><button onClick={()=>void applyTournamentBundle()}>Apply tournament bundle</button><button onClick={()=>{bundleRef.current=null;setBundlePreview(null);}}>Cancel</button></div>}
-   </section>
-   <section className="presentation-presets"><h3>Saved tournament display presets</h3>
-    <label>New preset name <input maxLength={80} value={presetName} onChange={e=>setPresetName(e.target.value)} placeholder="Example: Spring Championship"/></label>
-    <button onClick={()=>void savePreset()}>Save current display</button>
-    <label>Saved preset <select value={selectedPreset} onChange={e=>setSelectedPreset(e.target.value)}><option value="">Choose preset</option>{presets.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
-    <button disabled={!selectedPreset} onClick={()=>void loadPreset()}>Load preset</button>
-    <button disabled={!selectedPreset} onClick={()=>void deletePreset()}>Delete preset</button>
-    <button onClick={()=>void refreshPresets()}>Refresh presets</button>
-    <p>Presets save slides, images, layout and clock visibility. Loading a preset replaces the shared billboard for all connected displays.</p>
-   </section>
-   <div className="presentation-import-export"><button onClick={exportSlides}>Export slides</button><button onClick={()=>importRef.current?.click()}>Import slides</button><input ref={importRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={e=>{const file=e.target.files?.[0];if(file)void importSlides(file);e.currentTarget.value="";}}/></div>
-   {message&&<p role="status">{message}</p>}<p>Slides are shared through the tournament server when connected. Images can be uploaded to the tournament server or referenced by HTTPS URL.</p>
-   {slides.map((slide,i)=><div className="presentation-edit-slide" key={slide.id}>
-    <label>Title<input maxLength={100} value={slide.title} onChange={e=>update(slides.map((s,j)=>j===i?{...s,title:safeText(e.target.value,100)}:s))}/></label>
-    <label>Message<textarea maxLength={400} value={slide.body} onChange={e=>update(slides.map((s,j)=>j===i?{...s,body:safeText(e.target.value)}:s))}/></label>
-    <label>Type<select value={slide.kind} onChange={e=>update(slides.map((s,j)=>j===i?{...s,kind:e.target.value as Slide["kind"]}:s))}><option value="announcement">Announcement</option><option value="sponsor">Sponsor</option><option value="schedule">Schedule</option></select></label>
-    <label>Theme<select value={slide.theme||"default"} onChange={e=>void update(slides.map((x,j)=>j===i?{...x,theme:e.target.value as Slide["theme"]}:x))}><option value="default">Default</option><option value="blue">Blue</option><option value="gold">Gold</option><option value="dark">Dark</option></select></label>
-    <label>Image URL (HTTPS only)<input type="url" maxLength={1000} placeholder="https://example.com/sponsor.png" value={slide.imageUrl||""} onChange={e=>{const value=e.target.value;if(imageAllowed(value))void update(slides.map((x,j)=>j===i?{...x,imageUrl:value}:x));else setMessage("Image URL must use HTTPS and contain no credentials");}}/></label>
-    <label>Upload image (PNG, JPEG, WebP; max 5 MB)<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={e=>{const f=e.target.files?.[0];if(f)void uploadImage(f,slide.id);e.currentTarget.value="";}}/></label>
-    <label>Choose uploaded image<select value={slide.imageUrl?.startsWith("/api/billboard/assets/")?slide.imageUrl:""} onChange={e=>void update(slides.map((x,j)=>j===i?{...x,imageUrl:e.target.value}:x))}><option value="">No uploaded image</option>{assets.map(a=><option key={a.name} value={a.url}>{a.name}</option>)}</select></label>
-    <label>Seconds<input type="number" min={3} max={120} value={slide.duration} onChange={e=>update(slides.map((s,j)=>j===i?{...s,duration:Math.max(3,Math.min(120,Number(e.target.value)||10))}:s))}/></label>
-    <div className="presentation-edit-actions"><button disabled={i===0} onClick={()=>{const a=[...slides];[a[i-1],a[i]]=[a[i],a[i-1]];void update(a);}}>Move up</button><button disabled={i===slides.length-1} onClick={()=>{const a=[...slides];[a[i],a[i+1]]=[a[i+1],a[i]];void update(a);}}>Move down</button><button onClick={()=>void update(slides.filter((_,j)=>j!==i))}>Remove</button></div>
-   </div>)}
-   <section className="presentation-asset-library"><h3>Uploaded images</h3><button onClick={()=>void refreshAssets()}>Refresh images</button>{assets.map(a=><div key={a.name}><img src={a.url} alt="Uploaded billboard asset" loading="lazy"/><span>{(a.bytes/1024).toFixed(0)} KB</span><button onClick={()=>void deleteAsset(a.name)}>Delete unused</button></div>)}</section>
-   <button onClick={()=>void update([...slides,{id:crypto.randomUUID(),title:"New slide",body:"",duration:10,kind:"announcement",theme:"default"}])}>Add slide</button>
-   <label>Quick template <select aria-label="Slide template" id="slide-template"><option value="0">Welcome</option><option value="1">Sponsor thank-you</option><option value="2">Schedule update</option><option value="3">Awards ceremony</option></select></label>
-   <button onClick={()=>{const element=document.getElementById("slide-template") as HTMLSelectElement|null;const t=templates[Number(element?.value||0)];void update([...slides,{...t,id:crypto.randomUUID()}]);}}>Add template slide</button>
-   <button onClick={()=>{if(confirm("Reset all billboard slides?"))update(defaultBoard.slides);}}>Reset slides</button>
-  </aside>}
+  {scheduleEditing&&!fullscreen&&<ScheduleEditor doc={sharedDisplays} save={saveSharedDisplays} message={sharedStatus}/>}
+  {rotationEditing&&!fullscreen&&<RotationEditor doc={sharedDisplays} save={saveSharedDisplays} cameras={(session?.assignments||[]).filter(x=>x.cameraId).map(x=>({cameraId:x.cameraId,ring:x.ring}))}/>}
  </div>;
 }

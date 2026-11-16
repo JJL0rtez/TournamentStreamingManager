@@ -1,3 +1,4 @@
+import {installTournamentDisplays} from "./tournament-displays.js";
 import { installBillboardRoutes } from "./billboard-routes.js";
 import { readVersionedRecoveryReliabilityRules, saveVersionedRecoveryReliabilityRules, ReliabilityRuleConflict, readRecoveryReliabilityRuleHistory, restoreRecoveryReliabilityRules } from "./recovery-reliability-rules.js";
 import { readSharedWarnings, addSharedWarning, acknowledgeSharedWarning } from "./shared-recovery-warnings.js";
@@ -78,6 +79,7 @@ installOperatorAuth(app);
 app.use("/api", requireOperator);
 installRemoteNodeRoutes(app);
 installBillboardRoutes(app);
+installTournamentDisplays(app);
 
 const recordingManager = new RecordingManager();
 // Recorded sessions remain visible after a backend restart.
@@ -1687,6 +1689,37 @@ app.get("/api/previews/:cameraId/frame", (req, res) => {
   res.setHeader("Content-Type", "image/jpeg");
   res.setHeader("Cache-Control", "no-store");
   res.send(frame);
+});
+
+// Continuous multipart JPEG feed. Reuses the existing capture/preview process,
+// so it never opens a second DirectShow handle for an active camera.
+app.get("/api/display-live/:cameraId", (req, res) => {
+  const cameraId = String(req.params.cameraId);
+  const running = cameraCaptureManager.get(cameraId);
+  if (!(running?.capture.isRunning || previewSessionManager.get(cameraId))) {
+    res.status(404).json({ error: "Camera is not capturing or previewing." }); return;
+  }
+  res.status(200);
+  res.setHeader("Content-Type", "multipart/x-mixed-replace; boundary=frame");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  let previous: Buffer | null = null;
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped || res.destroyed || res.writableEnded) { cleanup(); return; }
+    const capture = cameraCaptureManager.get(cameraId);
+    const frame = capture?.capture.isRunning ? capture.capture.getFrame() : previewFrame(cameraId);
+    if (!frame || (previous && previous.equals(frame))) return;
+    previous = frame;
+    try {
+      res.write(`--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${frame.length}\r\n\r\n`);
+      res.write(frame);
+      res.write("\r\n");
+    } catch { cleanup(); }
+  }, 100);
+  function cleanup() { if (stopped) return; stopped = true; clearInterval(timer); if (!res.destroyed) res.end(); }
+  req.on("close", cleanup);
 });
 
 app.get("/api/captures/:cameraId/frame", (req, res) => {

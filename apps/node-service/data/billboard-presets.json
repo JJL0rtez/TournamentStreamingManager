@@ -1,0 +1,29 @@
+[
+  {
+    "id": "d416c594-3015-4221-8ca0-7be84acd3f66",
+    "name": "Test display",
+    "board": {
+      "slides": [
+        {
+          "id": "welcome",
+          "title": "Welcome",
+          "body": "Tournament information will appear here.",
+          "duration": 12,
+          "kind": "schedule",
+          "theme": "gold"
+        },
+        {
+          "id": "fec7d0a3-017a-4c10-997f-5348b0fe029e",
+          "title": "New slide",
+          "body": "",
+          "duration": 10,
+          "kind": "announcement"
+        }
+      ],
+      "updatedAt": 1794809507737
+    },
+    "layout": "minimal",
+    "showClock": true,
+    "createdAt": "2026-11-16T06:11:47.737Z"
+  }
+]
