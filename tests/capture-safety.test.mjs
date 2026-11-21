@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { classifyRestartRisk,checkCaptureRestartSafety } from '../scripts/windows/capture-safety.mjs';
+test('blocks if ffmpeg still exists',()=>assert.equal(classifyRestartRisk({platform:'win32',processes:[{name:'ffmpeg.exe',pid:42}]}).safe,false));
+test('allows empty confirmed Windows snapshot',()=>assert.equal(classifyRestartRisk({platform:'win32',processes:[]}).safe,true));
+test('fails closed on enumeration errors',()=>assert.equal(classifyRestartRisk({platform:'win32',probeError:new Error('denied')}).safe,false));
+test('fails closed outside Windows',()=>assert.equal(classifyRestartRisk({platform:'linux',processes:[]}).safe,false));
+test('normalizes a single Windows process result',async()=>{const result=await checkCaptureRestartSafety({platform:'win32',runner:async()=>({stdout:'{"name":"ffmpeg.exe","pid":22}'})});assert.equal(result.reason,'FFMPEG_PROCESS_STILL_RUNNING');});
+test('allows empty PowerShell results',async()=>{const result=await checkCaptureRestartSafety({platform:'win32',runner:async()=>({stdout:''})});assert.equal(result.safe,true);});
+test('blocks invalid JSON from PowerShell',async()=>{const result=await checkCaptureRestartSafety({platform:'win32',runner:async()=>({stdout:'invalid'})});assert.equal(result.safe,false);});

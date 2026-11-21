@@ -1,0 +1,14 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const ui=fs.readFileSync(new URL("../apps/dashboard/src/DistributedRemoteControls.tsx",import.meta.url),"utf8");
+test("read-only reconciliation endpoints",()=>{assert.match(ui,/requestNode\("\/api\/captures\/distributed-reconciliation"\)/);assert.match(ui,/requestNode\("\/api\/youtube\/distributed-reconciliation"\)/);});
+test("explicit operator-initiated verification",()=>assert.match(ui,/onClick=\{\(\) => void verifyStatus\(\)\}/));
+test("failed verification does not unlock commands",()=>{assert.match(ui,/Status check failed/);assert.match(ui,/setUncertain\(true\)/);});
+test("manual independent confirmation required",()=>assert.match(ui,/Have you independently checked the actual recording and YouTube state/));
+test("reconciliation not mistaken for video health",()=>assert.match(ui,/Confirm actual video and recording output separately/));
+test("stale verification ignored after node change",()=>assert.match(ui,/currentGeneration !== generation.current/));
+test("verification reset when command starts",()=>assert.match(ui,/setVerification\(null\);\n    try \{/));
+test("verification cannot run during command",()=>assert.match(ui,/!connected \|\| verificationInFlight\.current \|\| inFlight.current/));
+test("reject malformed capture response",()=>assert.match(ui,/Capture reconciliation unavailable or malformed/));
+test("reject malformed relay response",()=>assert.match(ui,/YouTube reconciliation unavailable or malformed/));

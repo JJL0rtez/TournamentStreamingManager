@@ -1,0 +1,9 @@
+const test=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const ts=require('/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript');const src=fs.readFileSync(path.join(__dirname,'../apps/dashboard/src/DistributedRemoteControls.tsx'),'utf8');
+test('TSX parses without diagnostics',()=>{const out=ts.transpileModule(src,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022},reportDiagnostics:true});assert.equal(out.diagnostics.length,0)});
+test('acknowledged commands are not called successful',()=>{assert.match(src,/request acknowledged/);assert.match(src,/no post-command status has been checked/);assert.doesNotMatch(src,/command completed successfully/i)});
+test('all command outcomes retain a timestamp and camera',()=>{assert.match(src,/startedAt = Date\.now\(\)/);assert.match(src,/cameraId: targetCamera/)});
+test('status observation does not claim verified success',()=>{assert.match(src,/does not prove the command took effect/);assert.match(src,/viewer-facing stream health still require independent confirmation/)});
+test('failed reconciliation leaves outcome unverified',()=>{assert.match(src,/phase: "check-failed"/);assert.match(src,/Status check failed\. Command outcome remains unverified/)});
+test('stale responses ignored when node changes',()=>{assert.match(src,/currentGeneration !== generation\.current/);assert.match(src,/setOutcome\(null\)/)});
+test('uncertain commands remain locked pending manual acknowledgement',()=>{assert.match(src,/pending \|\| uncertain/);assert.match(src,/!verification\?\.complete/)});
+test('read-only reconciliation remains distinct from mutation',()=>{assert.match(src,/Promise\.all/);assert.match(src,/distributed-reconciliation/);assert.match(src,/method: "POST"/)});

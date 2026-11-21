@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {validatePlan,parseArgs,sample,evaluate,observe} from '../tools/tournament-observer.mjs';
+const plan={durationSeconds:10,intervalSeconds:5,timeoutMs:1000,endpoints:[{id:'node',url:'http://127.0.0.1:1234/status'}],recordings:[{id:'cam',path:'test.mkv',minGrowthBytes:100}]};
+test('plan validates',()=>assert.equal(validatePlan(plan).durationSeconds,10));
+test('rejects embedded credentials',()=>assert.throws(()=>validatePlan({...plan,endpoints:[{id:'node',url:'http://user:pass@host'}]})));
+test('rejects invalid protocols',()=>assert.throws(()=>validatePlan({...plan,endpoints:[{id:'node',url:'file:///tmp/a'}]})));
+test('rejects duplicate endpoint IDs',()=>assert.throws(()=>validatePlan({...plan,endpoints:[plan.endpoints[0],plan.endpoints[0]]})));
+test('rejects excessive durations',()=>assert.throws(()=>validatePlan({...plan,durationSeconds:99999})));
+test('argument parsing',()=>assert.equal(parseArgs(['--plan','a.json','--dry-run']).dryRun,true));
+test('sample endpoint and recording',async()=>{const result=await sample(validatePlan(plan),{fetchFn:async()=>({status:200}),statFn:async()=>({size:150,mtimeMs:123}),now:()=>1000});assert.equal(result.endpoints[0].ok,true);assert.equal(result.recordings[0].bytes,150);});
+test('sample masks network errors',async()=>{const result=await sample(validatePlan(plan),{fetchFn:async()=>{throw Error('secret-url');},statFn:async()=>{const e=Error('missing');e.code='ENOENT';throw e;}});assert.equal(result.endpoints[0].error,'UNREACHABLE');assert.equal(result.recordings[0].error,'MISSING');});
+const make=(ok,bytes)=>({timestamp:'t',endpoints:[{id:'node',ok}],recordings:[{id:'cam',exists:true,bytes}]});
+test('passing observation',()=>assert.equal(evaluate([make(true,10),make(true,200)],plan).status,'pass'));
+test('fails on stalled recording',()=>assert.equal(evaluate([make(true,10),make(true,10)],plan).status,'fail'));
+test('fails on endpoint outage',()=>assert.equal(evaluate([make(true,10),make(false,200)],plan).checks[0].maxConsecutiveFailures,1));
+test('fails on missing recording',()=>{const s=make(true,200);s.recordings[0].exists=false;assert.equal(evaluate([make(true,10),s],plan).status,'fail');});
+test('observe samples repeatedly',async()=>{let i=0;const result=await observe(plan,{sampleFn:async()=>make(true,100*(++i)),sleep:async()=>{}});assert.equal(result.sampleCount,3);assert.equal(result.status,'pass');});

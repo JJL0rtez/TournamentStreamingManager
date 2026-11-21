@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const api=readFileSync(new URL('../apps/node-service/src/api.ts',import.meta.url),'utf8');
+test('relay opt-in is separate from capture opt-in',()=>assert.match(api,/distributedYoutubeEnabled = distributedCaptureEnabled && process\.env\.TSM_DISTRIBUTED_YOUTUBE/));
+test('independent youtube coordinator is disabled in shared ring mode',()=>assert.match(api,/youtubeCoordinationEnabled && !distributedYoutubeEnabled/));
+test('relay mutations require independent opt-in and explicit allowlisting',()=>{assert.match(api,/distributedYoutubeEnabled && \(/);assert.match(api,/youtubeRelayMutation/);assert.match(api,/youtube\/distributed-start-all/);assert.match(api,/youtube\/distributed-stop-all/);});
+test('relay starts are tied to a tracked capture',()=>{assert.match(api,/hasMember\("capture", cameraId\)/);assert.match(api,/distributedCaptureLifecycle\.start\("youtube", cameraId/);});
+test('relay stops require tracked membership',()=>{assert.match(api,/hasMember\("youtube",cameraId\)/);assert.match(api,/distributedCaptureLifecycle\.stop\("youtube",cameraId/);});
+test('capture stop paths refuse active relays',()=>{assert.equal((api.match(/STOP_YOUTUBE_RELAY_FIRST/g)||[]).length>=2,true);});

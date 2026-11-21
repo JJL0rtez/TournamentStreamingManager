@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const api=readFileSync(new URL('../apps/node-service/src/api.ts',import.meta.url),'utf8');
+const helper=api.split('async function restartExitedDistributedRelay')[1].split('// Explicit operator action')[0];
+const sweep=api.split('const relayRecoveryTimer = setInterval')[1].split('// Bulk YouTube controls')[0];
+test('independent explicit opt-in',()=>assert.match(api,/TSM_DISTRIBUTED_RELAY_AUTO_RECOVERY === "1"/));
+test('manual and automatic share restart helper',()=>{assert.match(api,/await restartExitedDistributedRelay\(req\.params\.cameraId\)/);assert.match(sweep,/await restartExitedDistributedRelay\(cameraId\)/)});
+test('refuses active and untracked relays',()=>{assert.match(helper,/UNTRACKED_RELAY_REQUIRES_RECONCILIATION/);assert.match(helper,/RELAY_STILL_RUNNING/)});
+test('requires healthy lease and local capture',()=>{assert.match(helper,/hasMember\("capture",cameraId\)/);assert.match(helper,/ring\.leaseLost/);assert.match(helper,/ring\.requiresReconciliation/)});
+test('rate limits and serializes recovery',()=>{assert.match(helper,/RELAY_RECOVERY_LIMIT_REACHED/);assert.match(helper,/RELAY_RECOVERY_COOLDOWN/);assert.match(helper,/beginSessionOperation\("youtube-relay-restart"\)/)});
+test('does not stop recording or release ring',()=>{assert.doesNotMatch(helper,/cameraCaptureManager\.stop|stopYoutubeRelay|\.release\(/);assert.match(helper,/distributedCaptureLifecycle\.restart\("youtube",cameraId/)});
+test('sweep skips active relays and uncertain rings',()=>{assert.match(sweep,/if \(youtubeStreams\.get\(cameraId\)\) continue/);assert.match(sweep,/ring\.leaseLost \|\| ring\.requiresReconciliation/)});
+test('operation type includes relay restart',()=>assert.match(api,/type SessionOperationKind = .*"youtube-relay-restart"/));

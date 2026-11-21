@@ -6,6 +6,7 @@ export interface RingAssignment {
   cameraId: string;
   cameraName: string;
   microphoneName: string;
+  microphoneId?: string;
   ring: string;
   audioSyncOffsetMs?: number;
   overlays?: Array<{ imageId: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number }>;
@@ -72,28 +73,40 @@ if (session && !session.eventId) {
 export function safeRecordingName(value: string): string { return safeName(value); }
 
 function safeName(value: string): string {
+  // Filesystem-only slug. Do not use for user-visible names.
   return value.trim().replace(/[^a-zA-Z0-9 _-]/g, "_").replace(/\s+/g, "_").slice(0, 80);
+}
+function safeDisplayName(value: string): string {
+  // Preserve whitespace in the GUI. Strip controls/path separators for safe directory names.
+  return value.trim().replace(/[\x00-\x1f\x7f\/\\]/g, " ").replace(/\s+/g, " ").slice(0, 80);
 }
 export function getSession(): TournamentSession | null { return session; }
 export function setSession(input: unknown, createNewEvent = false): TournamentSession {
   if (!input || typeof input !== "object") throw new Error("Invalid session.");
   const value = input as Partial<TournamentSession>;
-  if (typeof value.eventName !== "string" || !safeName(value.eventName) || !Array.isArray(value.assignments))
+  if (typeof value.eventName !== "string" || !safeDisplayName(value.eventName) || !Array.isArray(value.assignments))
     throw new Error("Event name and assignments are required.");
-  if (value.assignments.length > 8) throw new Error("Maximum 8 camera assignments per node.");
+  // Capacity is determined by verified hardware, not a fixed ring count.
   const seenCameras = new Set<string>();
   const seenMicrophones = new Set<string>();
+  const microphoneNames = new Map<string, boolean>();
   const seenRings = new Set<string>();
   const assignments = value.assignments.map((item) => {
     if (!item || !["cameraId","cameraName","microphoneName","ring"].every(
       (key) => typeof item[key as keyof RingAssignment] === "string" &&
       String(item[key as keyof RingAssignment]).trim()))
       throw new Error("Every assignment requires a camera, microphone and ring.");
-    const ring = safeName(item.ring);
+    const ring = safeDisplayName(item.ring);
     if (!ring) throw new Error("Invalid ring name.");
-    if (seenCameras.has(item.cameraId) || seenMicrophones.has(item.microphoneName) || seenRings.has(ring))
+    if (item.microphoneId !== undefined && (typeof item.microphoneId !== "string" || !item.microphoneId.trim() || item.microphoneId.length > 1024))
+      throw new Error("Invalid microphone ID.");
+    const microphoneIdentity = (item.microphoneId || item.microphoneName).trim().toLowerCase();
+    const nameKey = item.microphoneName.trim().toLowerCase();
+    const previousExplicit = microphoneNames.get(nameKey);
+    if (seenCameras.has(item.cameraId) || seenMicrophones.has(microphoneIdentity) ||
+        (previousExplicit !== undefined && (!previousExplicit || !item.microphoneId)) || seenRings.has(ring.toLocaleLowerCase()))
       throw new Error("Camera, microphone and ring assignments must be unique.");
-    seenCameras.add(item.cameraId); seenMicrophones.add(item.microphoneName); seenRings.add(ring);
+    seenCameras.add(item.cameraId); seenMicrophones.add(microphoneIdentity); microphoneNames.set(nameKey, Boolean(item.microphoneId)); seenRings.add(ring.toLocaleLowerCase());
     const audioSyncOffsetMs = item.audioSyncOffsetMs ?? -300;
     if (typeof audioSyncOffsetMs !== "number" || !Number.isInteger(audioSyncOffsetMs) ||
         audioSyncOffsetMs < -2000 || audioSyncOffsetMs > 2000)
@@ -108,11 +121,11 @@ export function setSession(input: unknown, createNewEvent = false): TournamentSe
       throw new Error("Invalid overlays (maximum four per camera).");
     }
     return { cameraId: item.cameraId, cameraName: item.cameraName,
-      microphoneName: item.microphoneName, ring, audioSyncOffsetMs, overlays };
+      microphoneName: item.microphoneName, ...(item.microphoneId ? { microphoneId: item.microphoneId } : {}), ring, audioSyncOffsetMs, overlays };
   });
   // Never trust an event ID from the client. Generate it on the server.
   const eventId = createNewEvent || !session ? randomUUID() : session.eventId;
-  const next = { eventId, eventName: safeName(value.eventName), assignments };
+  const next = { eventId, eventName: safeDisplayName(value.eventName), assignments };
   if (session) archiveSession(session);
   saveAtomic(sessionFile, next);
   archiveSession(next);

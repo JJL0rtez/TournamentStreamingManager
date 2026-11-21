@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const api=readFileSync(new URL('../apps/node-service/src/api.ts',import.meta.url),'utf8');
+const start=api.split('app.post("/api/youtube/distributed-start-all"')[1].split('app.post("/api/youtube/distributed-stop-all"')[0];
+const stop=api.split('app.post("/api/youtube/distributed-stop-all"')[1].split('// Bulk YouTube controls')[0];
+test('distributed bulk relay routes are explicitly opt-in',()=>{assert.match(api,/path === "\/youtube\/distributed-start-all"/);assert.match(api,/path === "\/youtube\/distributed-stop-all"/);assert.match(start,/!distributedYoutubeEnabled/);assert.match(stop,/!distributedYoutubeEnabled/)});
+test('bulk start requires owned running capture',()=>{assert.match(start,/capture\?\.capture\.isRunning/);assert.match(start,/hasMember\("capture",cameraId\)/)});
+test('bulk start acquires relay membership through lifecycle',()=>assert.match(start,/distributedCaptureLifecycle\.start\("youtube",cameraId/));
+test('bulk start rejects untracked running relay',()=>assert.match(start,/RELAY_MEMBERSHIP_MISMATCH/));
+test('bulk start validates mode and camera port',()=>{assert.match(start,/evaluateOutputStart/);assert.match(start,/CAMERA_TRANSPORT_PORT_COLLISION/)});
+test('bulk stop never stops untracked relay',()=>{assert.match(stop,/if \(!member \|\| !live\)/);assert.match(stop,/RELAY_MEMBERSHIP_MISMATCH_REQUIRES_RECONCILIATION/)});
+test('bulk stop retains capture membership',()=>{assert.match(stop,/distributedCaptureLifecycle\.stop\("youtube",cameraId/);assert.doesNotMatch(stop,/cameraCaptureManager\.stop/)});
+test('bulk operations serialize and return per camera results',()=>{assert.match(start,/beginSessionOperation/);assert.match(stop,/beginSessionOperation/);assert.match(start,/207:200/);assert.match(stop,/207:200/)});

@@ -1,0 +1,27 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {UnifiedRingLifecycle} from '../packages/capture-coordination/unified-lifecycle.mjs';
+const identityFor = cameraId => ({eventId:'event_1',ringId:cameraId==='cam2'?'ring2':'ring1',nodeId:'node1'});
+function fixture(){let active=new Map(),acquires=0,releases=0,failRelease=false;
+ const client={acquire:async identity=>{acquires++;const key=identity.eventId+identity.ringId;if(active.has(key))return {ok:false,code:'RING_OWNED'};const lease={...identity,leaseId:'lease_'+acquires};active.set(key,lease);return {ok:true,lease};},renew:async()=>({ok:true,lease:{leaseId:'lease_1'}}),release:async identity=>{if(failRelease)throw Error('offline');releases++;active.delete(identity.eventId+identity.ringId);return {ok:true};}};
+ const gate=new UnifiedRingLifecycle({client,identityFor});return {gate,stats:()=>({acquires,releases}),failRelease:()=>{failRelease=true}};}
+test('capture + youtube + legacy recording share one ring lease',async()=>{const f=fixture();await f.gate.start('capture','cam1',async()=>1);await f.gate.start('youtube','cam1',async()=>2);await f.gate.start('recording','cam1',async()=>3);assert.equal(f.stats().acquires,1);await f.gate.stop('youtube','cam1',async()=>{});assert.equal(f.stats().releases,0);await f.gate.stop('recording','cam1',async()=>{});await f.gate.stop('capture','cam1',async()=>{});assert.equal(f.stats().releases,1);});
+test('two cameras on distinct rings receive separate leases',async()=>{const f=fixture();await f.gate.start('capture','cam1',async()=>{});await f.gate.start('capture','cam2',async()=>{});assert.equal(f.stats().acquires,2);});
+test('failed start retains lease and blocks new starts',async()=>{const f=fixture();await assert.rejects(f.gate.start('capture','cam1',async()=>{throw Error('spawn failure')}));assert.equal(f.gate.status()[0].state,'uncertain');await assert.rejects(f.gate.start('youtube','cam1',async()=>{}),/UNCERTAIN/);assert.equal(f.stats().releases,0);});
+test('failed stop retains lease and blocks new starts',async()=>{const f=fixture();await f.gate.start('capture','cam1',async()=>{});await assert.rejects(f.gate.stop('capture','cam1',async()=>{throw Error('still recording')}));assert.equal(f.stats().releases,0);assert.equal(f.gate.status()[0].state,'uncertain');});
+test('failed release leaves ring reserved',async()=>{const f=fixture();await f.gate.start('capture','cam1',async()=>{});f.failRelease();await assert.rejects(f.gate.stop('capture','cam1',async()=>{}),/offline/);assert.equal(f.gate.status()[0].state,'uncertain');});
+test('concurrent duplicate start is rejected',async()=>{const f=fixture();let release;const wait=new Promise(resolve=>{release=resolve});const first=f.gate.start('capture','cam1',()=>wait);await assert.rejects(f.gate.start('capture','cam1',async()=>{}),/IN_PROGRESS/);release();await first;});
+test('untracked stop is rejected',async()=>{const f=fixture();await assert.rejects(f.gate.stop('capture','cam1',async()=>{}),/UNTRACKED/);});
+test('identity changes while ring active are rejected',async()=>{const f=fixture();await f.gate.start('capture','cam1',async()=>{});await assert.rejects(f.gate.start('capture','cam1',async()=>{}),/ALREADY_OWNED/);});
+test('changing recording output preserves capture and relay membership and serializes stops',async()=>{
+ const f=fixture();await f.gate.start('capture','cam1',async()=>{});await f.gate.start('youtube','cam1',async()=>{});
+ let release;const hold=new Promise(resolve=>{release=resolve;});const pending=f.gate.changeOutput('cam1',()=>hold);
+ await assert.rejects(f.gate.stop('youtube','cam1',async()=>{}),/IN_PROGRESS/);
+ release('recording-started');assert.equal(await pending,'recording-started');
+ assert.equal(f.stats().acquires,1);assert.equal(f.stats().releases,0);assert.ok(f.gate.hasMember('capture','cam1'));assert.ok(f.gate.hasMember('youtube','cam1'));
+ await f.gate.stop('youtube','cam1',async()=>{});await f.gate.stop('capture','cam1',async()=>{});
+});
+test('failed output change fences ownership without dropping live members',async()=>{
+ const f=fixture();await f.gate.start('capture','cam1',async()=>{});await assert.rejects(f.gate.changeOutput('cam1',async()=>{throw Error('disk failure');}),/disk failure/);
+ assert.equal(f.gate.status()[0].state,'uncertain');assert.ok(f.gate.hasMember('capture','cam1'));assert.equal(f.stats().releases,0);
+});

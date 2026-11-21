@@ -1,4 +1,4 @@
-.ts-display{padding:2vw;color:white;background:#050505;min-height:75vh}.ts-display h1{text-align:center;font-size:clamp(32px,4vw,72px)}.ts-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:1vw;align-items:start}.ts-tables table{width:100%;border-collapse:collapse;background:#f8fafc;color:#101828;font-size:clamp(13px,1.4vw,26px)}.ts-tables th{background:#173d66;color:white;padding:12px}.ts-tables .ts-subheading{background:#315c84;font-size:.8em}.ts-tables td{padding:8px 10px;border:1px solid #8c9eae}.ts-tables td:last-child{white-space:nowrap;text-align:right}.ts-tables tr:nth-child(even){background:#dce6ef}.ts-message{font-size:clamp(28px,4vw,70px);text-align:center;white-space:pre-wrap}.ts-editor{background:#16253a;color:white;padding:18px;margin:14px 0}.ts-editor label{display:grid;gap:5px;margin:8px 0}.ts-editor input:not([type=checkbox]),.ts-editor textarea{padding:8px;max-width:100%;color:#111}.ts-editor button{padding:8px;margin:4px;background:#30547d;color:white;border:1px solid #7792ae;border-radius:5px}.ts-edit-slide{border:1px solid #8295a9;padding:12px;margin:12px 0}.ts-edit-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.ts-edit-table{border:1px solid #8295a9;padding:12px}.ts-row{display:grid;grid-template-columns:2fr 1fr auto;gap:6px}.ts-row input{min-width:0}
+.ts-display{padding:2vw;color:white;background:#050505;min-height:75vh}.ts-display h1{text-align:center;font-size:clamp(32px,4vw,72px)}.ts-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:1vw;align-items:start}.ts-tables table{width:100%;border-collapse:collapse;background:#f5f5f5;color:#232323;font-size:clamp(13px,1.4vw,26px)}.ts-tables th{background:#383838;color:white;padding:12px}.ts-tables .ts-subheading{background:#505050;font-size:.8em}.ts-tables td{padding:8px 10px;border:1px solid #aaaaaa}.ts-tables td:last-child{white-space:nowrap;text-align:right}.ts-tables tr:nth-child(even){background:#dddddd}.ts-message{font-size:clamp(28px,4vw,70px);text-align:center;white-space:pre-wrap}.ts-editor{background:#262626;color:white;padding:18px;margin:14px 0}.ts-editor label{display:grid;gap:5px;margin:8px 0}.ts-editor input:not([type=checkbox]),.ts-editor textarea{padding:8px;max-width:100%;color:#111}.ts-editor button{padding:8px;margin:4px;background:#454545;color:white;border:1px solid #a4a4a4;border-radius:5px}.ts-edit-slide{border:1px solid #a0a0a0;padding:12px;margin:12px 0}.ts-edit-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.ts-edit-table{border:1px solid #a0a0a0;padding:12px}.ts-row{display:grid;grid-template-columns:2fr 1fr auto;gap:6px}.ts-row input{min-width:0}
 /* High-contrast display based on the original tournament assignment board. */
 .ts-display{background:#050505;color:#fff;min-height:calc(100vh - 110px);padding:1.2vw 1.5vw;box-sizing:border-box}
 .ts-branding{display:flex;align-items:center;justify-content:center;gap:1.4vw;min-height:105px;margin-bottom:1.5vw}
@@ -8,7 +8,7 @@
 .ts-tables th{background:#696969;color:#fff;font-size:1.4em;text-align:center;padding:.5em .25em;font-weight:800}
 .ts-tables td{background:#454545;border:2px solid #858585;padding:.34em .45em;line-height:1.16;font-weight:600;overflow-wrap:anywhere}
 .ts-tables tr:nth-child(even) td{background:#565656}.ts-tables td:first-child{width:77%}.ts-tables td:last-child{width:23%;white-space:nowrap;text-align:center}
-.ts-brand-editor{border:1px solid #8295a9;margin:12px 0;padding:12px}.ts-brand-edit-row{display:flex;gap:8px;align-items:center}.ts-brand-edit-row input:first-child{flex:1;min-width:0}.ts-brand-edit-row input[type=color]{width:55px;height:38px;padding:2px}
+.ts-brand-editor{border:1px solid #a0a0a0;margin:12px 0;padding:12px}.ts-brand-edit-row{display:flex;gap:8px;align-items:center}.ts-brand-edit-row input:first-child{flex:1;min-width:0}.ts-brand-edit-row input[type=color]{width:55px;height:38px;padding:2px}
 
 /* Fullscreen is a black, borderless canvas, regardless of the dashboard theme. */
 .presentation-root.presentation-fullscreen,.presentation-fullscreen .presentation-content,.presentation-fullscreen .ts-display{background:#000!important;border:0!important;outline:0!important;box-shadow:none!important;margin:0!important}
@@ -18,7 +18,7 @@
 .ts-tables{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:minmax(0,auto);align-items:start;gap:1.1vw}
 .ts-tables table{max-width:100%;min-width:0}
 .ts-logo{max-width:none;max-height:180px;object-fit:contain;flex-shrink:0}
-.ts-logo-control{display:grid;grid-template-columns:minmax(110px,1fr) minmax(150px,2fr) repeat(3,minmax(85px,1fr));gap:8px;align-items:center;padding:8px;border:1px solid #546579;margin:8px 0}
+.ts-logo-control{display:grid;grid-template-columns:minmax(110px,1fr) minmax(150px,2fr) repeat(3,minmax(85px,1fr));gap:8px;align-items:center;padding:8px;border:1px solid #696969;margin:8px 0}
 .ts-logo-control label{margin:0}.ts-logo-control input{width:100%}.ts-logo-control select{min-width:0;padding:8px}
 .ts-table-placement{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .ts-table-placement select{padding:8px;width:100%}
@@ -31,3 +31,70 @@ html:has(.presentation-fullscreen),body:has(.presentation-fullscreen),#root:has(
 .ts-brand-lines{flex:0 1 auto;min-width:0;text-align:center}
 .ts-brand-clock{grid-column:3;justify-self:end;white-space:nowrap;color:#fff;font-size:clamp(18px,2vw,38px);font-weight:700;font-variant-numeric:tabular-nums}
 @media(max-width:900px){.ts-branding{grid-template-columns:1fr 3fr 1fr}.ts-brand-clock{font-size:clamp(14px,1.8vw,24px)}}
+
+/* Batch 59 slide editor and display refinements */
+.ts-tables{gap:.45vw;align-items:stretch;grid-auto-rows:minmax(90px,auto)}
+.ts-tables table{height:100%;align-self:stretch}
+.ts-tables td{height:1.6em;box-sizing:border-box}
+.ts-tables thead th{border:2px solid #858585}
+.ts-tables thead tr:first-child th{border-top:2px solid #858585}
+.ts-message-wrap,.ts-media-slide{display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 240px);text-align:center}
+.ts-message-wrap>div{max-width:90%;margin:auto}
+.ts-announcement-title{font-size:clamp(28px,3vw,58px);margin:0 0 .6em;color:#fff}
+.ts-sponsor-video{max-width:100%;max-height:calc(100vh - 240px);object-fit:contain}
+.ts-editor-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;z-index:10;background:#262626;border-bottom:1px solid #a0a0a0;padding:8px 0}
+.ts-editor-toolbar h2{margin:0}
+.ts-editor textarea,.ts-editor input:not([type=checkbox]):not([type=color]){color:#fff;background:#383838;border:1px solid #a0a0a0}
+.ts-editor select{color:#fff;background:#383838;border:1px solid #a0a0a0}
+.ts-editor input[type=color]{background:transparent}
+.ts-edit-tables{gap:6px}
+.ts-edit-table{padding:8px}
+.ts-layout-preview{margin:10px 0;padding:8px;border:1px solid #a0a0a0}
+.ts-layout-preview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;margin-top:5px}
+.ts-layout-preview-cell{border:1px solid #a4a4a4;background:#383838;min-height:22px;padding:3px 6px;font-size:12px;overflow-wrap:anywhere}
+
+/* Batch 60: remove the forced viewport-sized slide that produced a vertical
+   scrollbar even when the actual slide content was short. Long slides still
+   scroll naturally so no rows or announcements are clipped. */
+.presentation-root:not(.presentation-fullscreen) .presentation-content>.ts-display{min-height:0}
+
+/* v16: flexible short slides, explicit row-time formatting. */
+.presentation-root:not(.presentation-fullscreen) .presentation-content>.ts-display{min-height:0;max-width:100%;flex:1 1 auto;}
+.presentation-root:not(.presentation-fullscreen) .ts-message-wrap,.presentation-root:not(.presentation-fullscreen) .ts-media-slide{min-height:0;padding:16px;}
+.ts-display .ts-tables{overflow:visible;min-width:0;}
+.ts-tables td.ts-time-cell{white-space:normal;overflow-wrap:anywhere;}
+.ts-editor,.ts-editor-toolbar{background:#232323;border-color:#555;}
+.ts-editor input:not([type=checkbox]):not([type=color]),.ts-editor textarea,.ts-editor select{background:#303030;border-color:#666;color:white;}
+.ts-editor button{background:#383838;border-color:#666;}
+.ts-editor .ts-row{grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;align-items:center;}
+.ts-editor .ts-time-format{grid-column:2;display:flex;align-items:center;gap:4px;flex-wrap:wrap;}
+.ts-editor .ts-row>button:last-child{grid-column:3;grid-row:1 / span 2;}
+.ts-time-format button[aria-pressed=true]{color:#171717;background:#d8ab55;}
+.ts-time-format input[type=color]{width:34px;height:30px;padding:2px;}
+.ts-time-format select{font-size:.85rem;min-width:0;max-width:100%;}
+
+.ts-clock-format{margin-top:12px;border:1px solid #555;display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px;align-items:end}
+.ts-clock-format input[type=color]{width:48px;height:36px}
+
+.ts-layout-preview,.ts-brand-editor,.ts-edit-slide,.ts-edit-table{border-color:#666}
+.ts-layout-preview-cell{background:#383838;color:#fff;border-color:#777}
+.ts-tables .ts-subheading{background:#555;color:#fff}
+.ts-sponsor-file{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ts-sponsor-file input{min-width:0;max-width:100%}
+
+/* v19: compact and consistent display setup. */
+.ts-editor.ts-rotation-editor{max-width:1040px;margin:16px auto;padding:18px;display:grid;gap:12px;box-sizing:border-box;width:calc(100% - 24px);border:1px solid #555;border-radius:10px}
+.ts-rotation-group{min-width:0;margin:0;padding:12px 16px;border:1px solid #555;border-radius:7px;background:#292929}
+.ts-rotation-group legend{font-weight:650;padding:0 6px;color:#f0f0f0}
+.ts-rotation-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;align-items:start}
+.ts-rotation-fields label{margin:4px 0;min-width:0;font-size:.9rem}
+.ts-rotation-fields input{width:100%;box-sizing:border-box}
+.ts-editor label.ts-check-row{display:flex;align-items:center;justify-content:flex-start;gap:8px;margin:4px 0;min-height:34px;cursor:pointer}
+.ts-check-row input[type=checkbox]{width:20px;height:20px;flex:0 0 20px;margin:0;accent-color:#d8ab55}
+.ts-exclusions{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:4px 12px}
+.ts-sponsor-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #484848;padding:5px 0;min-width:0}
+.ts-sponsor-row span{overflow-wrap:anywhere;min-width:0}.ts-sponsor-row button{flex:none}
+.ts-help{font-size:.88rem;color:#bbb;margin:6px 0}.ts-sponsor-file{margin-top:8px;align-items:start;flex-direction:column}.ts-sponsor-file label{margin:0;max-width:100%}
+.ts-sponsor-playback{position:relative;display:flex;align-items:center;justify-content:center;min-height:0;min-width:0;max-height:100%;width:100%}
+.td-camera .ts-sponsor-playback{flex:1 1 auto;overflow:hidden}.ts-sound-unlock{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:#383838;color:#fff;border:1px solid #d8ab55;padding:8px 14px;border-radius:5px;cursor:pointer}
+.ts-sponsor-playback video{display:block;pointer-events:none}.ts-sponsor-playback video::-webkit-media-controls{display:none!important}

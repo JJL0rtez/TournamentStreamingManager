@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const app=readFileSync(new URL('../apps/dashboard/src/App.tsx',import.meta.url),'utf8');
+const license=readFileSync(new URL('../apps/dashboard/src/EventPassPanel.tsx',import.meta.url),'utf8');
+const hardware=readFileSync(new URL('../apps/dashboard/src/HardwareReadinessPanel.tsx',import.meta.url),'utf8');
+test('license panel is mounted on each online node',()=>assert.match(app,/<EventPassPanel requestNode=\{requestNode\} local=\{node.local\}/));
+test('hardware panel is mounted on each online node',()=>assert.match(app,/<HardwareReadinessPanel requestNode=\{requestNode\} local=\{node.local\}/));
+test('node request callback is stable across status refreshes',()=>assert.match(app,/const requestNode = useCallback\(/));
+test('pass installation is distinct from explicit activation',()=>{assert.match(license,/\/api\/entitlement\/install/);assert.match(license,/\/api\/entitlement\/activate/);assert.match(license,/window.confirm/);});
+test('remote nodes cannot mutate licenses',()=>assert.match(license,/local && status.configured/));
+test('storage planning includes both capacity and sustained write checks',()=>{assert.match(hardware,/capacityEnough/);assert.match(hardware,/throughputEnough/);});
+test('disk benchmark requires user confirmation',()=>assert.match(hardware,/window.confirm\("Run a 64 MiB/));
+test('USB baseline and change comparison are wired',()=>{assert.match(hardware,/\/api\/usb\/topology\/baseline/);assert.match(hardware,/\/api\/usb\/topology\/changes/);});

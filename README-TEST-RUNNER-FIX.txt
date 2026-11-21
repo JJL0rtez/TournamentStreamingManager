@@ -1,1 +1,0 @@
-Replace package.json, add tests/core-integration.test.mts, and delete the old tests/core-integration.test.ts. Run npm run test:core then npm run check:integration. The .mts extension forces ESM so top-level await is supported.

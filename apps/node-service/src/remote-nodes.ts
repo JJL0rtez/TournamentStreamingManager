@@ -1,7 +1,11 @@
+import { readBoundedResponse, RemoteResponseTooLarge } from "./remote-response-limit.js";
+import { PeerTransport, normalizeEndpoints, type Endpoint } from "./peer-transport.js";
+import { summarizeFleet, selectNodeStatus, type FleetNodeSnapshot } from "./fleet-readiness.js";
 import { getSettings } from "./persistent-settings.js";
 import type { Express, Request, Response, NextFunction } from "express";
 
-interface Peer { id: string; name: string; url: string; token: string }
+interface Peer { id: string; name: string; url: string; token: string; endpoints: Endpoint[] }
+const peerTransport = new PeerTransport();
 const nodeId = process.env.NODE_ID || "local";
 const nodeName = process.env.NODE_NAME || "Primary PC";
 const nodeToken = process.env.NODE_TOKEN || "";
@@ -22,20 +26,41 @@ function peers(): Peer[] {
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Invalid peer protocol");
     if (url.username || url.password || url.pathname !== "/" || url.search || url.hash)
       throw new Error("Peer URL must be an origin, e.g. http://192.168.1.25:3001");
-    return { id: value.id, name: value.name, token: value.token, url: url.origin };
+    const endpoints=normalizeEndpoints(url.origin, value.lanUrl, value.tailscaleUrl);
+    return { id: value.id, name: value.name, token: value.token, url: url.origin, endpoints };
   });
 }
 
 // Only these exact API paths can be forwarded to another node.
-const allowed = [
+export const allowedRemoteNodeRoutes = [
   /^\/api\/health$/,
+  /^\/api\/captures\/health$/,
+  /^\/api\/camera-health\/usb-warnings$/,
+  /^\/api\/youtube\/profiles$/,
+  /^\/api\/operations\/live-readiness$/,
+  /^\/api\/operations\/playback-observation$/,
+  /^\/api\/operations\/youtube-platform-health$/,
+  /^\/api\/captures\/distributed-ownership$/,
+  /^\/api\/captures\/distributed-reconciliation$/,
+  /^\/api\/captures\/distributed-(start-all|stop-all)$/,
+  /^\/api\/youtube\/distributed-reconciliation$/,
+  /^\/api\/youtube\/distributed-(start-all|stop-all)$/,
+  /^\/api\/youtube\/[^/]+\/distributed-restart$/,
+  /^\/api\/storage\/health$/,
+  /^\/api\/storage\/readiness$/,
+  /^\/api\/storage\/benchmark$/,
+  /^\/api\/usb\/topology$/,
+  /^\/api\/usb\/topology\/changes$/,
+  /^\/api\/entitlement\/status$/,
+  /^\/api\/output-mode\/readiness$/,
+  /^\/api\/output-inventory$/,
   /^\/api\/session$/,
   /^\/api\/session\/(start-all|stop-all)$/,
   /^\/api\/devices$/,
   /^\/api\/captures$/,
   /^\/api\/captures\/start$/,
   /^\/api\/captures\/stop-all$/,
-  /^\/api\/captures\/[^/]+\/(stop|frame)$/,
+  /^\/api\/captures\/[^/]+\/(stop|recover|recording|frame)$/,
   /^\/api\/previews$/,
   /^\/api\/previews\/start$/,
   /^\/api\/previews\/[^/]+\/(stop|frame)$/,
@@ -62,10 +87,7 @@ export function installRemoteNodeRoutes(app: Express) {
   app.get("/api/nodes", async (_req, res) => {
     const statuses = await Promise.all(configuredPeers.map(async (peer) => {
       try {
-        const response = await fetch(`${peer.url}/api/health`, {
-          headers: { "x-tournament-node-token": peer.token },
-          signal: AbortSignal.timeout(2500)
-        });
+        const {response} = await peerTransport.request(peer.id,peer.endpoints,"/api/health",peer.token);
         return { id: peer.id, name: peer.name, online: response.ok, local: false };
       } catch { return { id: peer.id, name: peer.name, online: false, local: false }; }
     }));
@@ -73,16 +95,81 @@ export function installRemoteNodeRoutes(app: Express) {
     res.json({ nodes: [{ id: nodeId, name: nodeName, online: true, local: true }, ...statuses] });
   });
 
+  // Fleet health is read-only and bounded. A peer outage never stops local capture.
+  app.get("/api/nodes/fleet-readiness", async (_req, res) => {
+    const all = [{id:nodeId,name:nodeName,url:"",token:"",local:true},
+      ...configuredPeers.map(p=>({...p,local:false}))];
+    const results: FleetNodeSnapshot[] = await Promise.all(all.map(async node => {
+      const started=Date.now();
+      const errors:string[]=[];
+      const read = async (route:string):Promise<unknown|null> => {
+        try {
+          if(node.local)return null;
+          const endpointPeer=configuredPeers.find(p=>p.id===node.id);
+          if(!endpointPeer)throw new Error("Unknown peer");
+          const {response}=await peerTransport.request(node.id,endpointPeer.endpoints,route,node.token);
+          if(!response.ok){errors.push(`${route}: HTTP ${response.status}`);return null;}
+          const contentLength=Number(response.headers.get("content-length")??"0");
+          if(contentLength>262144){errors.push(`${route}: oversized response`);return null;}
+          const text=await response.text();
+          if(text.length>262144){errors.push(`${route}: oversized response`);return null;}
+          return selectNodeStatus(JSON.parse(text));
+        }catch(error){errors.push(`${route}: ${error instanceof Error?error.message:String(error)}`);return null;}
+      };
+      if(node.local){
+        // Do not self-fetch through a potentially public bind address.
+        return {id:node.id,name:node.name,local:true,online:true,checkedAt:new Date().toISOString(),
+          latencyMs:0,health:{local:true},storage:null,captures:null,entitlement:null,
+          errors:["Local details available from this node's own health and storage endpoints"]};
+      }
+      const health=await read("/api/health");
+      if(!health)return {id:node.id,name:node.name,local:false,online:false,
+        checkedAt:new Date().toISOString(),latencyMs:Date.now()-started,health:null,
+        storage:null,captures:null,entitlement:null,errors};
+      const [storage,captures,entitlement]=await Promise.all([
+        read("/api/storage/health"),read("/api/captures/health"),read("/api/entitlement/status")
+      ]);
+      return {id:node.id,name:node.name,local:false,online:true,
+        checkedAt:new Date().toISOString(),latencyMs:Date.now()-started,
+        health,storage,captures,entitlement,errors};
+    }));
+    res.setHeader("Cache-Control","no-store");
+    res.json(summarizeFleet(results));
+  });
+
+  app.get("/api/nodes/transports",(_req,res)=>{
+    res.setHeader("Cache-Control","no-store");
+    res.json({nodes:configuredPeers.map(peer=>({id:peer.id,name:peer.name,
+      endpoints:peer.endpoints.map(e=>({kind:e.kind,url:e.url})),
+      ...peerTransport.report(peer.id)}))});
+  });
+
   // Route to a configured origin only, never a URL provided by the browser.
   app.use("/api/nodes/:nodeId", async (req, res) => {
     const peer = configuredPeers.find((item) => item.id === req.params.nodeId);
     if (!peer) { res.status(404).json({ error: "Unknown node" }); return; }
     const targetPath = `/api${req.path}`;
-    if (!allowed.some((pattern) => pattern.test(targetPath)) || !["GET", "POST", "PUT"].includes(req.method)) {
+    if (req.url.length > 4096) { res.status(414).json({error:"Node query too long"}); return; }
+    if (!allowedRemoteNodeRoutes.some((pattern) => pattern.test(targetPath)) || !["GET", "POST", "PUT"].includes(req.method)) {
       res.status(404).json({ error: "Unsupported node operation" }); return;
     }
+    // Experimental distributed actions are opt-in at the primary proxy. They are never
+    // replayed across transports, and the remote service applies its own lease fencing.
+    const distributedMutation = /^\/api\/(captures|youtube)\/distributed-(start-all|stop-all)$/.test(targetPath) ||
+      /^\/api\/youtube\/[^/]+\/distributed-restart$/.test(targetPath) ||
+      /^\/api\/captures\/[^/]+\/(?:recover|recording)$/.test(targetPath);
+    if (distributedMutation && process.env.TSM_REMOTE_DISTRIBUTED_CONTROL !== "1") {
+      res.status(403).json({error:"Remote distributed commands disabled; set TSM_REMOTE_DISTRIBUTED_CONTROL=1 on the primary node"});
+      return;
+    }
     // Do not permit a GET to invoke a mutating endpoint or vice versa.
-    const readOnly = targetPath === "/api/session" ? req.method === "GET" : targetPath === "/api/health" || targetPath === "/api/devices" ||
+    const readOnly = targetPath === "/api/session" ? req.method === "GET" : targetPath === "/api/health" || targetPath === "/api/operations/live-readiness" || targetPath === "/api/operations/playback-observation" || targetPath === "/api/operations/youtube-platform-health" || targetPath === "/api/captures/health" || targetPath === "/api/camera-health/usb-warnings" || targetPath === "/api/youtube/profiles" ||
+      targetPath === "/api/storage/health" || targetPath === "/api/storage/readiness" ||
+      targetPath === "/api/captures/distributed-ownership" || targetPath === "/api/captures/distributed-reconciliation" ||
+      targetPath === "/api/youtube/distributed-reconciliation" ||
+      targetPath === "/api/storage/benchmark" || targetPath === "/api/usb/topology" ||
+      targetPath === "/api/usb/topology/changes" || targetPath === "/api/entitlement/status" ||
+      targetPath === "/api/output-mode/readiness" || targetPath === "/api/output-inventory" || targetPath === "/api/devices" ||
       targetPath === "/api/captures" || targetPath === "/api/previews" ||
       targetPath === "/api/youtube/streams" || targetPath.endsWith("/frame");
     if ((readOnly && req.method !== "GET") ||
@@ -90,23 +177,28 @@ export function installRemoteNodeRoutes(app: Express) {
       res.status(405).json({ error: "Method not allowed" }); return;
     }
     try {
-      const upstream = await fetch(`${peer.url}${targetPath}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`, {
-        method: req.method,
-        headers: {
-          "x-tournament-node-token": peer.token,
-          ...(["POST", "PUT"].includes(req.method) ? { "content-type": "application/json" } : {})
-        },
-        body: ["POST", "PUT"].includes(req.method) ? JSON.stringify(req.body ?? {}) : undefined,
-        signal: AbortSignal.timeout(targetPath.endsWith("start-all") || targetPath.endsWith("stop-all") ? 180000 : targetPath.endsWith("/start") || targetPath.endsWith("/stop") ? 30000 : 6000)
-      });
-      res.status(upstream.status);
+      const {response:upstream}=await peerTransport.request(peer.id,peer.endpoints,
+        `${targetPath}${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`,
+        peer.token,{
+          method:req.method as "GET"|"POST"|"PUT",
+          body:["POST","PUT"].includes(req.method)?JSON.stringify(req.body??{}):undefined,
+          timeoutMs:targetPath.endsWith("start-all") || targetPath.endsWith("stop-all") ? 180000 : targetPath.endsWith("/start") || targetPath.endsWith("/stop") || targetPath.endsWith("/recover") || targetPath.endsWith("/recording") || targetPath.endsWith("/distributed-restart") ? 30000 : 6000
+        });
+      // Bound streaming response reads, including frames and missing Content-Length.
+      const maxBytes = targetPath.endsWith("/frame") ? 8 * 1024 * 1024 : 2 * 1024 * 1024;
+      let bytes: Buffer;
+      try { bytes = await readBoundedResponse(upstream, maxBytes); }
+      catch (error) {
+        if (error instanceof RemoteResponseTooLarge) {
+          res.status(502).json({error:error.message}); return;
+        }
+        throw error;
+      }
       res.setHeader("Cache-Control", "no-store");
-      const type = upstream.headers.get("content-type") || "application/octet-stream";
-      res.setHeader("Content-Type", type);
-      const bytes = Buffer.from(await upstream.arrayBuffer());
-      res.send(bytes);
+      res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+      res.status(upstream.status).send(bytes);
     } catch {
-      res.status(502).json({ error: `Node ${peer.name} unavailable or timed out` });
+      if (!res.headersSent) res.status(502).json({ error: `Node ${peer.name} unavailable or timed out` });
     }
   });
 }

@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import os from 'node:os';import path from 'node:path';
+import {parseWindowsProcessList,classifyOwnedProcess,ownershipReport,writeOwnershipRecords,readOwnershipRecords,captureOwnershipReport} from '../scripts/windows/process-ownership.mjs';
+import {acquireLocalClaim,releaseLocalClaim} from '../scripts/windows/stream-claims.mjs';
+test('normalizes single Windows process',()=>assert.equal(parseWindowsProcessList({Name:'ffmpeg.exe',ProcessId:23})[0].pid,23));
+test('recognizes live owned ffmpeg',()=>assert.equal(classifyOwnedProcess({record:{id:'cam1',pid:2,creationDate:'x'},processes:[{pid:2,name:'ffmpeg.exe',creationDate:'x',commandLine:''}]}).state,'running'));
+test('rejects PID reuse',()=>assert.equal(classifyOwnedProcess({record:{id:'cam1',pid:2,creationDate:'x'},processes:[{pid:2,name:'ffmpeg.exe',creationDate:'y'}]}).state,'ambiguous'));
+test('blocks unowned ffmpeg',()=>assert.equal(ownershipReport([],[{pid:3,name:'ffmpeg.exe'}]).canRestart,false));
+test('permits restart when all owned processes exited',()=>assert.equal(ownershipReport([{id:'cam1',pid:3}],[]).canRestart,true));
+test('ownership registry persists and reads',async()=>{const dir=await mkdtemp(path.join(os.tmpdir(),'tsm-ownership-'));try{await writeOwnershipRecords([{id:'cam1',pid:3}],dir);assert.equal((await readOwnershipRecords(dir))[0].pid,3);}finally{await rm(dir,{recursive:true,force:true});}});
+test('claim is exclusive and release is owner-only',async()=>{const dir=await mkdtemp(path.join(os.tmpdir(),'tsm-claims-'));try{const a={eventId:'event1',ringId:'ring1',nodeId:'host1',sessionId:'session1'};assert.equal((await acquireLocalClaim(a,dir)).ok,true);assert.equal((await acquireLocalClaim({...a,sessionId:'session2'},dir)).ok,false);await assert.rejects(releaseLocalClaim({...a,sessionId:'session2'},dir));assert.equal(await releaseLocalClaim(a,dir),true);}finally{await rm(dir,{recursive:true,force:true});}});
+test('inspection failure blocks restart',async()=>{const result=await captureOwnershipReport({processReader:async()=>{throw new Error('offline');}});assert.equal(result.canRestart,false);});

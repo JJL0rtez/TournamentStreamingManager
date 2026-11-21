@@ -1,11 +1,11 @@
 /* Tournament Streaming Manager: base theme */
 :root {
-  --bg: #16171d; --surface: #20212a; --surface-raised: #262833;
-  --surface-hover: #2d303c; --border: #383b49; --text: #d0d3dd;
-  --text-h: #f4f5f9; --muted: #9ba2b4; --accent: #60a5fa;
-  --accent-bg: rgba(59,130,246,.12); --accent-border: rgba(59,130,246,.35);
-  --success: #22c55e; --warning: #f4b860; --danger: #f17e88;
-  --code-bg: #242630; --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --bg: #171717; --surface: #232323; --surface-raised: #2c2c2c;
+  --surface-hover: #343434; --border: #484848; --text: #e1e1e1;
+  --text-h: #ffffff; --muted: #b3b3b3; --accent: #d8ab55;
+  --accent-bg: rgba(216,171,85,.12); --accent-border: rgba(216,171,85,.40);
+  --success: #36c990; --warning: #d8ab55; --danger: #e36d70;
+  --code-bg: #303030; --sans: system-ui, "Segoe UI", Roboto, sans-serif;
   color-scheme: dark; font: 15px/1.55 var(--sans); color: var(--text);
   background: var(--bg); font-synthesis: none; text-rendering: optimizeLegibility;
 }
@@ -23,9 +23,9 @@ p:last-child { margin-bottom: 0; }
 small,.muted { color: var(--muted); }
 code,pre { font-family: Consolas, "Courier New", monospace; background: var(--code-bg); border-radius: 5px; }
 code { padding: .12rem .35rem; overflow-wrap: anywhere; }
-a { color: #93c5fd; }
+a { color: #e6c37c; }
 button,input,select,textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .48; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-::selection { background: rgba(59,130,246,.35); }
+::selection { background: rgba(216,171,85,.35); }

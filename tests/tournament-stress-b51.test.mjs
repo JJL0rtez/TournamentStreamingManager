@@ -1,0 +1,17 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,readdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {parseStressArgs,benchmarkDisk,parseDshowDevices,inspectCameras,runStress} from '../tools/tournament-stress.mjs';
+test('rejects unsafe benchmark sizes',()=>{for(const n of ['0','4097','1.5'])assert.throws(()=>parseStressArgs(['--size-mib',n]));});
+test('rejects invalid duration and camera count',()=>{assert.throws(()=>parseStressArgs(['--duration-seconds','100']));assert.throws(()=>parseStressArgs(Array(9).fill(0).flatMap(()=>['--camera','X'])));});
+test('benchmark writes, flushes and cleans up',async()=>{const dir=await mkdtemp(join(tmpdir(),'tsm-stress-'));try{const result=await benchmarkDisk(dir,{sizeMiB:16,minMiBps:0});assert.equal(result[0].status,'pass');assert.deepEqual(await readdir(dir),[]);}finally{await rm(dir,{recursive:true,force:true});}});
+test('benchmark flags threshold miss',async()=>{const dir=await mkdtemp(join(tmpdir(),'tsm-stress-'));try{const result=await benchmarkDisk(dir,{sizeMiB:16,minMiBps:10000});assert.equal(result[0].status,'fail');}finally{await rm(dir,{recursive:true,force:true});}});
+test('missing directory fails without modifying unrelated files',async()=>{const result=await benchmarkDisk('/nonexistent/tsm-b51-dir',{sizeMiB:16});assert.equal(result[0].status,'fail');});
+test('parses DirectShow video and audio without alternative names',()=>{const s='[dshow @ 1] DirectShow video devices\n[dshow @ 1] "EMEET S600"\n[dshow @ 1] Alternative name "@device_abc"\n[dshow @ 1] DirectShow audio devices\n[dshow @ 1] "Microphone"';assert.deepEqual(parseDshowDevices(s),[{kind:'video',name:'EMEET S600'},{kind:'audio',name:'Microphone'}]);});
+test('non-Windows camera check is a warning',async()=>{const result=await inspectCameras({cameras:['X'],platform:'linux'});assert.equal(result[0].status,'warn');});
+test('missing camera fails without attempting capture',async()=>{let calls=0;const result=await inspectCameras({cameras:['Missing'],platform:'win32',command:async()=>{calls++;return {stderr:'[dshow @ 1] DirectShow video devices\n[dshow @ 1] "Other"'};}});assert.equal(calls,1);assert.equal(result[0].status,'fail');});
+test('camera success requires decoded frames',async()=>{let calls=0;const command=async()=>++calls===1?{stderr:'[dshow @ 1] DirectShow video devices\n[dshow @ 1] "Cam"'}:{ok:true,stderr:'frame=  245 fps=30'};const result=await inspectCameras({cameras:['Cam'],platform:'win32',command});assert.equal(result[0].status,'pass');assert.equal(result[0].frames,245);});
+test('camera zero frames fails even if command succeeds',async()=>{let calls=0;const command=async()=>++calls===1?{stderr:'[dshow @ 1] DirectShow video devices\n[dshow @ 1] "Cam"'}:{ok:true,stderr:'no frames'};const result=await inspectCameras({cameras:['Cam'],platform:'win32',command});assert.equal(result[0].status,'fail');});
+test('runStress produces structured summary',async()=>{const dir=await mkdtemp(join(tmpdir(),'tsm-stress-'));try{const opts=parseStressArgs(['--directory',dir,'--size-mib','16','--min-mibps','0']);const result=await runStress(opts);assert.equal(result.summary.status,'pass');assert.equal(result.schemaVersion,1);}finally{await rm(dir,{recursive:true,force:true});}});

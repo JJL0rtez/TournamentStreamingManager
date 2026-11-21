@@ -1,5 +1,5 @@
 {
-  "revision": 14,
+  "revision": 27,
   "slides": [
     {
       "id": "6fe756df-12ce-4d80-8abf-23248c185dad",
@@ -8,47 +8,10 @@
       "kind": "schedule",
       "tables": [
         {
-          "heading": "Tatami 3",
+          "heading": "Ring 1",
           "subheading": "",
-          "rowSpan": 1,
-          "rows": [
-            {
-              "event": "Women's 18+ BB - Forms",
-              "time": "9:00am"
-            },
-            {
-              "event": "Sparring",
-              "time": "2:00pm"
-            },
-            {
-              "event": "7-8 Novice",
-              "time": "10:00am"
-            },
-            {
-              "event": "11-12 Novice",
-              "time": "11:00am"
-            },
-            {
-              "event": "15-17 Intermediate",
-              "time": "12:00pm"
-            },
-            {
-              "event": "Womens 18+ Advance",
-              "time": "1:00pm"
-            },
-            {
-              "event": "   ",
-              "time": "   "
-            },
-            {
-              "event": "   ",
-              "time": "   "
-            }
-          ]
-        },
-        {
-          "heading": "Tatami 4",
-          "subheading": "Divisions",
+          "row": 0,
+          "column": 0,
           "rowSpan": 1,
           "rows": [
             {
@@ -84,36 +47,185 @@
               "time": "2:00pm"
             }
           ]
-        }
-      ],
-      "body": ""
-    },
-    {
-      "id": "4b365998-627c-45d8-aa69-42560a085f33",
-      "title": "Ring Assignments",
-      "duration": 20,
-      "kind": "schedule",
-      "tables": [
+        },
         {
-          "heading": "Ring 1",
-          "subheading": "Divisions",
+          "heading": "Ring 2",
+          "subheading": "",
+          "row": 0,
+          "column": 1,
           "rowSpan": 1,
           "rows": [
             {
-              "event": "sssss",
-              "time": "sds"
+              "event": "Women's 18+ BB - Forms",
+              "time": "9:00am"
             },
             {
-              "event": "sadsad",
-              "time": "ssss"
+              "event": "Sparring",
+              "time": "9:00am"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "10:00am"
+            },
+            {
+              "event": "11-12 Novice",
+              "time": "11:00am"
+            },
+            {
+              "event": "15-17 Intermediate",
+              "time": "1:00pm"
+            },
+            {
+              "event": "Womens 18+ Advance",
+              "time": "2:00pm"
+            },
+            {
+              "event": "",
+              "time": ""
+            },
+            {
+              "event": "",
+              "time": ""
+            }
+          ]
+        },
+        {
+          "heading": "Ring 1",
+          "subheading": "",
+          "row": 1,
+          "column": 0,
+          "rowSpan": 1,
+          "rows": [
+            {
+              "event": "Women's 18+ BB - Forms",
+              "time": "9:00am"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "9:00am"
+            },
+            {
+              "event": "Sparring",
+              "time": "10:00am"
+            },
+            {
+              "event": "15-17 Intermediate",
+              "time": "11:00am"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "1:00pm"
+            },
+            {
+              "event": "Sparring",
+              "time": "2:00pm"
+            },
+            {
+              "event": "15-17 Intermediate",
+              "time": "2:00pm"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "2:00pm"
+            }
+          ]
+        },
+        {
+          "heading": "Ring 1",
+          "subheading": "",
+          "row": 1,
+          "column": 1,
+          "rowSpan": 1,
+          "rows": [
+            {
+              "event": "Women's 18+ BB - Forms",
+              "time": "9:00am"
+            },
+            {
+              "event": "Sparring",
+              "time": "9:00am"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "10:00am"
+            },
+            {
+              "event": "Sparring",
+              "time": "11:00am"
+            },
+            {
+              "event": "15-17 Intermediate",
+              "time": "1:00pm"
+            },
+            {
+              "event": "7-8 Novice",
+              "time": "2:00pm"
+            },
+            {
+              "event": "Sparring",
+              "time": "2:00pm"
+            },
+            {
+              "event": "",
+              "time": ""
             }
           ]
         }
       ],
-      "body": ""
+      "body": "",
+      "videoUrl": "",
+      "durationOverride": false
+    },
+    {
+      "id": "1e71e949-329e-4434-828d-87729854e0de",
+      "title": "",
+      "duration": 5,
+      "kind": "schedule",
+      "tables": [
+        {
+          "heading": "Ring 4",
+          "subheading": "",
+          "row": 0,
+          "column": 0,
+          "rowSpan": 1,
+          "rows": [
+            {
+              "event": "Vet Men 42+ BB",
+              "time": "10:00pm"
+            }
+          ]
+        }
+      ],
+      "body": "",
+      "videoUrl": "",
+      "durationOverride": false
+    },
+    {
+      "id": "c6624c43-3a3d-4a5c-9daa-38b4732e5266",
+      "title": "Announcement",
+      "duration": 5,
+      "kind": "announcement",
+      "tables": [],
+      "body": "The tournament will pause at noon for a lunch break. Enjoy your lunch!",
+      "videoUrl": "",
+      "durationOverride": false
+    },
+    {
+      "id": "913c19ea-0a3e-41c5-a054-421a752917d7",
+      "title": "Sponsor title",
+      "duration": 20,
+      "kind": "sponsor",
+      "tables": [],
+      "body": "text for sponser",
+      "videoUrl": "/api/tournament-displays/media/6836248d-8a50-44ea-8df3-4dc71e3d5a9c.mp4",
+      "durationOverride": false
     }
   ],
   "branding": {
+    "clockSettings": {
+      "seconds": true,
+      "size": 54
+    },
     "lines": [
       {
         "text": "STK Master of the Ring",
@@ -125,7 +237,8 @@
       }
     ],
     "leftLogos": [
-      "/api/billboard/assets/023814dd-70cd-4332-90a3-4c4293cba27b.png"
+      "/api/billboard/assets/023814dd-70cd-4332-90a3-4c4293cba27b.png",
+      "/api/billboard/assets/4a9fc1d8-b728-4e9b-bd92-f2127b0b4113.png"
     ],
     "titleLeftLogo": "/api/billboard/assets/023814dd-70cd-4332-90a3-4c4293cba27b.png",
     "titleRightLogo": "/api/billboard/assets/047afcee-60ae-4908-9d44-15dd2f36b9ce.png",
@@ -133,10 +246,15 @@
   },
   "rotation": {
     "enabled": true,
-    "cameraSeconds": 20,
+    "cameraSeconds": 5,
     "motionThreshold": 12,
-    "sponsorEvery": 0,
-    "sponsorVideos": [],
+    "sponsorEvery": 1,
+    "sponsorVideos": [
+      "/api/tournament-displays/media/ecaa82bc-fe68-47f0-a19a-6dbd9f1b1931.mp4"
+    ],
+    "sponsorVideoNames": {
+      "/api/tournament-displays/media/ecaa82bc-fe68-47f0-a19a-6dbd9f1b1931.mp4": "Video Project 4.mp4"
+    },
     "blacklist": []
   }
 }

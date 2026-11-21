@@ -1,0 +1,11 @@
+{
+  "intervalSeconds": 30,
+  "probeSeconds": 12,
+  "cameras": [
+    {
+      "cameraId": "ring1",
+      "playbackUrl": "https://example.org/public-playback/ring1.m3u8"
+    }
+  ],
+  "observerId": "observer-main"
+}

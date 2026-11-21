@@ -1,0 +1,104 @@
+[
+  {
+    "stage": "01-storage",
+    "source": "TournamentStreaming-Storage-Readiness-Bulk.zip",
+    "files": 9,
+    "sha256": "003a8b51083226297aa0ebb8bcf79c7821b8cdebe0db7b21eee848afdb1c56ee"
+  },
+  {
+    "stage": "02-usb",
+    "source": "TournamentStreaming-USB-Topology-Bulk.zip",
+    "files": 9,
+    "sha256": "1a202f9a9861673f9917bee1f0e0c74d44cd4b50274600fdfac319888447a525"
+  },
+  {
+    "stage": "03-licensing",
+    "source": "TournamentStreaming-Event-Pass-Core-Bulk.zip",
+    "files": 8,
+    "sha256": "bc9015005b8df662ddea3f7ef751efccd455a25ab6a98432ab237a716da95e8b"
+  },
+  {
+    "stage": "04-issuer",
+    "source": "TournamentStreaming-Event-Pass-Issuer-Bulk.zip",
+    "files": 12,
+    "sha256": "2d5435a7c690af96d238871dae736fd6b3d7edfb36e9fae5cabfd93eb2f13f45"
+  },
+  {
+    "stage": "05-operator",
+    "source": "TournamentStreaming-Operator-Workflows-Bulk.zip",
+    "files": 9,
+    "sha256": "f4afa846c3ca8b416fa7d33a9277a06a7b87dfd024374b0fde59ecdfc73a808e"
+  },
+  {
+    "stage": "06-fleet",
+    "source": "TournamentStreaming-Multi-PC-Fleet-Bulk.zip",
+    "files": 12,
+    "sha256": "d55c9124cbd64b31c692865f6ef1c0d456475363c144a3381f8599706087e046"
+  },
+  {
+    "stage": "07-replay",
+    "source": "TournamentStreaming-Replay-Simulation-Bulk.zip",
+    "files": 17,
+    "sha256": "d80c2a81c5367a80eb065140cc3db599f35df8f83c9c32b0cd87bf9d4576d0fb"
+  },
+  {
+    "stage": "08-windows",
+    "source": "TournamentStreaming-Windows-Deployment-Operations-Bulk.zip",
+    "files": 13,
+    "sha256": "49b9c6ff513049cee5cdd4938d0fc003a3a15285f148b9126afd32dd8948a9ce"
+  },
+  {
+    "stage": "09-supervisor",
+    "source": "TournamentStreaming-Windows-Recovery-Startup-Bulk.zip",
+    "files": 16,
+    "sha256": "f458ceda87ab4261e82901c942e4836b30532d33e0b8afc9d87c542f3f378eae"
+  },
+  {
+    "stage": "10-failover",
+    "source": "TournamentStreaming-Multi-Link-Failover-Bulk.zip",
+    "files": 8,
+    "sha256": "59d86fbce1e40f076eadbf8ff9c8e948853a32885b8a8cb60577ca90a61f845f"
+  },
+  {
+    "stage": "11-capture-safe",
+    "source": "TournamentStreaming-Capture-Safe-Restart-Interlock.zip",
+    "files": 8,
+    "sha256": "0a741806d82e9faa59cb6d2309f8cf8ac10c88a6d207a78b1958f0c743a90236"
+  },
+  {
+    "stage": "12-ownership",
+    "source": "TournamentStreaming-Capture-Ownership-Recovery-Bulk.zip",
+    "files": 11,
+    "sha256": "67deaa0e4b869dc95d2677c19b27ac3b0d13759372880abc1a361a466e518696"
+  },
+  {
+    "stage": "13-coordinator",
+    "source": "TournamentStreaming-Distributed-Ring-Coordination-Bulk.zip",
+    "files": 16,
+    "sha256": "a72979008ecbf131b79636e0d5ee6ff53dc404431af9ef8d0a4c61eedcd62e8d"
+  },
+  {
+    "stage": "14-youtube",
+    "source": "TournamentStreaming-YouTube-Lifecycle-Coordination-Bulk.zip",
+    "files": 17,
+    "sha256": "a20b3d3a4f9a92d4c4e433573a0dcbf6cb03b6d91a504ebaf2dd14863ba7fb24"
+  },
+  {
+    "stage": "15-remote",
+    "source": "TournamentStreaming-Remote-Capture-Controls-Bulk.zip",
+    "files": 6,
+    "sha256": "f1cc7e9820b5ef90556a1d09f44d2fb394b1a407a52f27931bb08ebb9f670237"
+  },
+  {
+    "stage": "16-unified",
+    "source": "TournamentStreaming-Unified-Capture-Recording-YouTube-Bulk.zip",
+    "files": 20,
+    "sha256": "31243ed03c5ed2b47da01d7eaff636a529f1d6b7338f91c591b4fed108f8a6de"
+  },
+  {
+    "stage": "17-dashboard",
+    "source": "TournamentStreaming-Dashboard-Crash-Repair-Integration-Audit-Bulk.zip",
+    "files": 9,
+    "sha256": "04e26c95090371eaeabfe02bf46296d9e19be5b32b234e46e79e24c8660a023e"
+  }
+]

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "Two-PC tournament: camera freeze, silence, stream outage, recovery",
+  "durationMs": 120000,
+  "events": [
+    {"atMs":0,"node":"main","ring":"ring-1","signal":"video","state":"ok"},
+    {"atMs":0,"node":"secondary","ring":"ring-7","signal":"audio","state":"ok"},
+    {"atMs":10000,"node":"main","ring":"ring-1","signal":"video","state":"degraded","detail":"Frozen-frame detector sees no motion"},
+    {"atMs":15000,"node":"secondary","ring":"ring-7","signal":"audio","state":"failed","detail":"Silence detector triggered"},
+    {"atMs":25000,"node":"main","ring":"ring-1","signal":"video","state":"failed","detail":"Frozen for 15 seconds"},
+    {"atMs":30000,"node":"secondary","ring":"ring-7","signal":"youtube","state":"failed","detail":"Viewer-side playback unreachable"},
+    {"atMs":45000,"node":"main","ring":"ring-1","signal":"video","state":"ok","detail":"Video resumed"},
+    {"atMs":50000,"node":"secondary","ring":"ring-7","signal":"audio","state":"ok","detail":"Audio restored"},
+    {"atMs":90000,"node":"secondary","ring":"ring-7","signal":"youtube","state":"ok","detail":"Viewer-side playback restored"}
+  ],
+  "expected": [
+    {"node":"main","ring":"ring-1","signal":"video","state":"failed","byMs":25000},
+    {"node":"secondary","ring":"ring-7","signal":"audio","state":"failed","byMs":15000},
+    {"node":"secondary","ring":"ring-7","signal":"youtube","state":"failed","byMs":30000},
+    {"node":"secondary","ring":"ring-7","signal":"youtube","state":"ok","byMs":90000}
+  ]
+}

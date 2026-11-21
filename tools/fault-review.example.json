@@ -1,0 +1,1 @@
+{"scenarios":[{"id":"coordinator-link-interruption","type":"endpoint-outage","targetId":"coordinator","startSample":2,"endSample":5,"maxRecoverySamples":3},{"id":"recording-continues","type":"recording-continuity","targetId":"ring1","startSample":2,"endSample":5,"maxRecoverySamples":3}]}

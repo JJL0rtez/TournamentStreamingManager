@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {summarizeAcceptance} from '../tools/tournament-acceptance.mjs';
+const multicam={host:'A',summary:{status:'pass'},cameras:[{cameraId:'c1',status:'pass',media:{duration:120}}]};
+const observer={host:'A',summary:{status:'pass'},sampleCount:10,checks:[]};
+test('combines recording and observer results',()=>assert.equal(summarizeAcceptance([multicam,observer],{expectedCameras:1}).status,'pass'));
+test('fails when observer has no monitoring interval',()=>assert.equal(summarizeAcceptance([multicam,{...observer,sampleCount:1}],{expectedCameras:1}).status,'fail'));
+test('fails when recording is shorter than ten seconds',()=>assert.equal(summarizeAcceptance([{...multicam,cameras:[{cameraId:'c1',status:'pass',media:{duration:5}}]}],{expectedCameras:1}).status,'fail'));
+test('duplicate camera identities across PCs fail',()=>assert.equal(summarizeAcceptance([multicam,{...multicam,host:'B'}],{expectedCameras:2}).status,'fail'));
+test('failed observer fails overall acceptance',()=>assert.equal(summarizeAcceptance([multicam,{...observer,summary:{status:'fail'}}],{expectedCameras:1}).status,'fail'));

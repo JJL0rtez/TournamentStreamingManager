@@ -1,0 +1,17 @@
+const test=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const cp=require('node:child_process');
+const src=fs.readFileSync(path.join(__dirname,'../apps/dashboard/src/DistributedRemoteControls.tsx'),'utf8');
+const ts=require(cp.execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim()+'/typescript');
+const compiled=ts.transpileModule(src,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},reportDiagnostics:true});
+test('TSX transpiles cleanly',()=>assert.equal(compiled.diagnostics.length,0));
+const sandbox={exports:{}};const vm=require('node:vm');vm.runInNewContext(compiled.outputText,{module:sandbox,exports:sandbox.exports,require:(name)=>name==='react'?{useEffect(){},useRef(){},useState(){}}:name==='react/jsx-runtime'?{jsx(){},jsxs(){}}:require(name)});const observe=sandbox.exports.observeCameraState;
+test('running and tracked capture is observable',()=>assert.match(observe({running:['c1'],tracked:['c1']},{relays:[{cameraId:'c1',state:'healthy-local'}]},'c1'),/capture process running; capture lease tracked; relay healthy-local/));
+test('stopped capture is not misrepresented',()=>assert.match(observe({running:[],tracked:['c1']},{relays:[]},'c1'),/capture process not running/));
+test('missing observation is unknown',()=>assert.match(observe({},{},'c1'),/unavailable/));
+test('bulk operation cannot be verified from one camera',()=>assert.match(observe({running:[],tracked:[]},{relays:[]},''),/Bulk command outcomes/));
+test('snapshot explicitly disclaims command success',()=>assert.match(observe({running:[],tracked:[]},{relays:[]},'c1'),/not proof of command success/));
+test('selected camera is captured at check start',()=>assert.match(src,/const checkedCamera = camera/));
+test('selection changes invalidate outstanding checks',()=>assert.match(src,/selectionVersion !== cameraSelectionVersion.current/));
+test('changing camera clears old verification',()=>assert.match(src,/setSelectedCamera\(e.target.value\); setVerification\(null\)/));
+test('manual acknowledgement is scoped to checked camera',()=>assert.match(src,/verification.cameraId !== camera/));
+test('remote commands still require operator confirmation',()=>assert.match(src,/window.confirm\(`\$\{action.warning\}/));
+test('remote command errors still lock controls',()=>assert.match(src,/setUncertain\(true\)/));

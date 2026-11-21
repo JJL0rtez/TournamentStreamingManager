@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const api=readFileSync(new URL('../apps/node-service/src/api.ts',import.meta.url),'utf8');
+const start=api.split('app.post("/api/captures/distributed-start-all"')[1].split('app.post("/api/captures/distributed-stop-all"')[0];
+const stop=api.split('app.post("/api/captures/distributed-stop-all"')[1].split('app.post("/api/captures/stop-all"')[0];
+test('bulk routes are explicitly allowed but only in opt-in mode',()=>{assert.match(api,/"\/api\/captures\/distributed-start-all"/);assert.match(api,/"\/api\/captures\/distributed-stop-all"/);assert.match(start,/if \(!distributedCaptureLifecycle\)/);assert.match(stop,/if \(!distributedCaptureLifecycle\)/);});
+test('bulk start leases every new camera and checks output entitlement',()=>{assert.match(start,/evaluateOutputStart/);assert.match(start,/distributedCaptureLifecycle\.start\("capture",cameraId/);assert.match(start,/reserveCaptureStart/);});
+test('bulk start refuses untracked active processes and tracked missing processes',()=>{assert.match(start,/UNTRACKED_RUNNING_CAPTURE/);assert.match(start,/TRACKED_CAPTURE_NOT_RUNNING_REQUIRES_RECONCILIATION/);});
+test('bulk stop only stops lifecycle members',()=>{assert.match(stop,/distributedCaptureLifecycle\.hasMember/);assert.match(stop,/distributedCaptureLifecycle\.stop\("capture",cameraId/);});
+test('bulk routes do not mutate youtube relays',()=>{assert.doesNotMatch(start,/startYoutubeRelay|stopYoutubeRelay|stopAllYoutubeRelays/);assert.doesNotMatch(stop,/startYoutubeRelay|stopYoutubeRelay|stopAllYoutubeRelays/);});
+test('bulk operations serialize with tournament operations',()=>{assert.match(start,/beginSessionOperation\("start-all"\)/);assert.match(stop,/beginSessionOperation\("stop-all"\)/);});
+test('bulk operations provide partial failure results',()=>{assert.match(start,/results\.some\(item=>!item\.ok\)\?207:200/);assert.match(stop,/results\.some\(item=>!item\.ok\)\?207:200/);});

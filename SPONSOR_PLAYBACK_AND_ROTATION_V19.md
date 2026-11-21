@@ -1,0 +1,8 @@
+# Sponsor playback and rotation v19
+
+- Sponsor slides with videos advance on the media-ended event by default; ordinary slides still use the configured duration. Tick Override video duration to use the configured seconds instead. Overrides longer than the clip loop it; shorter overrides cut the clip. A stalled/unavailable clip advances after a bounded watchdog interval.
+- Both presentation modes request playback with audio enabled and hide native controls. Browsers may block sound autoplay until the operator interacts with the page; an Enable sponsor sound button appears if playback is rejected. The button is not a native player control. Browser policies cannot be overridden by application code.
+- Original filenames are retained in both slide and rotation settings for newly uploaded files. Previously uploaded files do not contain recoverable names in the old configuration; they display generic labels rather than UUIDs and can be reselected to recover the name. Legacy direct media addresses still play; the rotation editor now accepts files only. The Billboard editor retains optional direct HTTPS media input.
+- Rotation editor groups timing, camera exclusions and sponsor files, with larger checkboxes and an aligned responsive grid. A failed save retains the edit rather than marking it saved. Storage health uses saturated green text.
+
+Validation: complete native JS/TS test run 717 passed, 0 failed, 1 optional media test skipped. Final focused tests passed after preserving optional direct media input in Billboard. Seven edited TS/TSX source files parsed without syntax errors. Full workspace typecheck, Vite production build, and browser playback are not verified in this environment.

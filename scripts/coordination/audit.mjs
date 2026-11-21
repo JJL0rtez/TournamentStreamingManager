@@ -1,0 +1,2 @@
+import {LeaseStore} from '../../packages/capture-coordination/store.mjs';
+const store=new LeaseStore(process.env.TSM_COORDINATOR_DATA_DIR||'.tsm-runtime/coordinator');const now=Date.now();const leases=await store.list();console.log(JSON.stringify({at:new Date().toISOString(),leases:leases.map(x=>({...x,expired:x.expiresAt<=now})),stale:leases.filter(x=>x.expiresAt<=now).length},null,2));if(leases.some(x=>x.expiresAt<=now))process.exitCode=2;

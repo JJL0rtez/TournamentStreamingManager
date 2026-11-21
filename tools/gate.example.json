@@ -1,0 +1,8 @@
+{
+  "expectedCameras": 8,
+  "maxAgeMinutes": 180,
+  "hosts": [
+    {"id":"PC1","cameraIds":["ring1","ring2","ring3","ring4","ring5"],"readiness":"reports/pc1-readiness.json","stress":"reports/pc1-stress.json","multicam":"reports/pc1-multicam.json","observer":"reports/pc1-observer.json"},
+    {"id":"PC2","cameraIds":["ring6","ring7","ring8"],"readiness":"reports/pc2-readiness.json","stress":"reports/pc2-stress.json","multicam":"reports/pc2-multicam.json","observer":"reports/pc2-observer.json"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "durationSeconds": 120,
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "bitrateMbps": 8,
+  "cameras": [
+    { "id": "ring1", "video": "EMEET SmartCam S600", "audio": "Microphone (EMEET SmartCam S600)" }
+  ]
+}

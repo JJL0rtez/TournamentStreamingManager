@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+const api=readFileSync(new URL('../apps/node-service/src/api.ts',import.meta.url),'utf8');
+const inspection=api.split('app.get("/api/youtube/distributed-reconciliation"')[1].split('// Explicit operator action only. Never stop a live relay')[0];
+const restart=api.split('async function restartExitedDistributedRelay(cameraId: string)')[1].split('// Explicit operator action. Shares the same rate limits')[0];
+test('inspection is read-only and omits secrets',()=>{assert.match(inspection,/youtubeStreams\.list\(\)/);assert.match(inspection,/distributedCaptureLifecycle\.status\(\)/);assert.doesNotMatch(inspection,/getYouTubeKey|\.start\(|\.stop\(/)});
+test('inspection differentiates exited, untracked, and uncertain relays',()=>{for(const state of ['relay-exited','untracked-running','ownership-uncertain','capture-not-owned'])assert.ok(inspection.includes(state));});
+test('restart requires opt in and is operator initiated',()=>{assert.match(restart,/!distributedYoutubeEnabled/);assert.match(restart,/beginSessionOperation/);assert.match(api,/app.post\("\/api\/youtube\/:cameraId\/distributed-restart"/);assert.match(api,/await restartExitedDistributedRelay\(req.params.cameraId\)/)});
+test('restart refuses live or untracked relay',()=>{assert.match(restart,/UNTRACKED_RELAY_REQUIRES_RECONCILIATION/);assert.match(restart,/RELAY_STILL_RUNNING/)});
+test('restart validates owned capture and lease state',()=>{assert.match(restart,/hasMember\("capture",cameraId\)/);assert.match(restart,/ring\.leaseLost/);assert.match(restart,/ring\.pendingStarts/)});
+test('restart checks output restrictions and port collisions',()=>{assert.match(restart,/productionRelayError/);assert.match(restart,/CAMERA_TRANSPORT_PORT_COLLISION/)});
+test('restart uses existing lease and does not stop recording',()=>{assert.match(restart,/distributedCaptureLifecycle\.restart\("youtube",cameraId/);assert.doesNotMatch(restart,/cameraCaptureManager\.stop|stopYoutubeRelay|distributedCaptureLifecycle\.start/)});
+test('restart errors are surfaced without stream keys',()=>{assert.match(api,/DISTRIBUTED_RELAY_RESTART_BLOCKED/);assert.doesNotMatch(restart,/res\.json\(\{[^}]*key/)});

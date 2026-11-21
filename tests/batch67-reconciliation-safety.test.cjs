@@ -1,0 +1,17 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const cp = require('node:child_process');
+const source = fs.readFileSync(path.join(__dirname,'../apps/dashboard/src/DistributedRemoteControls.tsx'),'utf8');
+const tsPath = path.join(cp.execFileSync('npm',['root','-g'],{encoding:'utf8'}).trim(),'typescript');
+const ts = require(tsPath);
+test('TSX parses without diagnostics',()=>{const file=ts.createSourceFile('remote.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX); assert.equal(file.parseDiagnostics.length,0)});
+test('reconciliation requires both structured payloads',()=>{assert.match(source,/export function isCompleteReconciliation/); for(const k of ['untrackedRunning','trackedNotRunning','uncertainRings','relays']) assert.ok(source.includes(`Array.isArray(`)&&source.includes(k));});
+test('uncertain lock requires complete check and manual confirmation',()=>{assert.match(source,/!verification\?\.complete/);assert.match(source,/window\.confirm\(`Have you independently checked/);});
+test('no automatic retry of remote mutations',()=>{assert.doesNotMatch(source,/setInterval\s*\(/);assert.match(source,/inFlight\.current = true/);});
+test('stale verification cannot overwrite newer operation',()=>{assert.match(source,/currentOperation !== lastOperation\.current/);assert.match(source,/lastOperation\.current \+= 1/);});
+test('verification and mutation requests are mutually exclusive',()=>{assert.match(source,/verificationInFlight\.current \|\| inFlight\.current/);assert.match(source,/inFlight\.current \|\| verificationInFlight\.current/);});
+test('node switch resets verification and mutation guards',()=>{assert.match(source,/generation\.current \+= 1/);assert.match(source,/verificationInFlight\.current = false/);});
+test('transport errors produce incomplete reconciliation',()=>{assert.match(source,/complete: false/);});
+test('diagnostic response is not described as viewer health',()=>{assert.match(source,/does not prove stream health/);});

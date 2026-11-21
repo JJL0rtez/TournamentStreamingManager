@@ -1,0 +1,20 @@
+{
+  "eventId": "spring-tournament-2027",
+  "expectedCameras": 8,
+  "maxAgeMinutes": 180,
+  "gateReport": "../reports/tournament-gate.json",
+  "deployments": [
+    { "hostId": "PC1", "report": "../reports/PC1/PC1-deployment.json" },
+    { "hostId": "PC2", "report": "../reports/PC2/PC2-deployment.json" }
+  ],
+  "drills": [
+    { "id": "eight-camera-load", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "audio-review", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "recording-integrity", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "usb-camera-recovery", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "youtube-relay-recovery", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "network-outage", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "secondary-pc-failover", "status": "pending", "observedAt": "", "operator": "", "evidence": "" },
+    { "id": "viewer-playback", "status": "pending", "observedAt": "", "operator": "", "evidence": "" }
+  ]
+}

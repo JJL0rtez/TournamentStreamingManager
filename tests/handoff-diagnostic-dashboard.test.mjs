@@ -1,0 +1,12 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+const read=(file)=>readFileSync(new URL(`../${file}`,import.meta.url),"utf8");
+const api=read("apps/node-service/src/api.ts");
+const app=read("apps/dashboard/src/App.tsx");
+test("capture API returns actual mode",()=>assert.match(api,/outputMode: managed\.outputMode/));
+test("start API returns actual mode",()=>assert.match(api,/recordingPath: managed\.recordingPath,\s+recordingEnabled: managed\.recordingEnabled,\s+outputMode: managed\.outputMode/));
+test("ordinary recording explicitly uses production capture mode",()=>assert.match(app,/recordingEnabled: true, mode: "production"/));
+test("dashboard checks backend readiness",()=>assert.match(app,/requestNode\("\/api\/output-mode\/readiness"\)/));
+test("diagnostic controls are not offered to ordinary camera users",()=>assert.doesNotMatch(app,/Recording mode\{" "\}/));
+test("dashboard still disables relays for diagnostic captures",()=>assert.match(app,/diagnosticActive \|\|/));

@@ -1,3 +1,4 @@
+import { guardFfmpegPipes } from "./ffmpeg-pipes.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { streamPort } from "./stream-port.js";
 
@@ -24,11 +25,98 @@ type StreamSession = {
   stopPromise: Promise<void> | null;
   lastProgressFrame: number;
   lastProgressOutTimeUs: number;
+  retryCount: number;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  streamKey: string;
+  generation: number;
 };
 
 export class YouTubeStreamManager {
   private sessions = new Map<string, StreamSession>();
   private lastExits = new Map<string, { at: string; code: number | null; error: string | null }>();
+  private retryCounts = new Map<string, { attempts: number; firstAt: number }>();
+  private relayGeneration = new Map<string, number>();
+  private cancelled = new Set<string>();
+  private readonly recoveryEnabled = process.env.TOURNAMENT_RELAY_AUTO_RECOVER === "1";
+  private readonly recoveryEvents: Array<{ cameraId: string; at: string; type: "scheduled" | "attempt" | "reconnected" | "exhausted" | "cancelled" | "skipped" | "failed"; detail: string }> = [];
+  // Recovery is permitted only while the matching local capture remains active.
+  // Distributed relay recovery has a separate lease-aware coordinator in api.ts.
+  constructor(private readonly captureIsActive: (cameraId: string) => boolean = () => false) {}
+
+  private recordRecovery(cameraId: string, type: "scheduled" | "attempt" | "reconnected" | "exhausted" | "cancelled" | "skipped" | "failed", detail: string): void {
+    this.recoveryEvents.push({ cameraId, type, detail, at: new Date().toISOString() });
+    if (this.recoveryEvents.length > 150) this.recoveryEvents.splice(0, this.recoveryEvents.length - 150);
+  }
+
+  recoveryEventsSnapshot() { return [...this.recoveryEvents].reverse(); }
+  private readonly retryLimit = 3;
+  private readonly retryWindowMs = 10 * 60_000;
+  private readonly retryDelaysMs = [2000, 4000, 8000];
+  private pendingRecovery = new Map<string, ReturnType<typeof setTimeout>>();
+  private recoveryDueAt = new Map<string, string>();
+
+  recoveryStatus() {
+    return [...new Set([...this.retryCounts.keys(), ...this.pendingRecovery.keys()])].map(cameraId => ({
+      cameraId, attempts: this.retryCounts.get(cameraId)?.attempts ?? 0,
+      pending: this.pendingRecovery.has(cameraId),
+      enabled: this.recoveryEnabled,
+      captureActive: this.captureIsActive(cameraId),
+      nextRetryAt: this.recoveryDueAt.get(cameraId) ?? null
+    }));
+  }
+
+  private cancelRecovery(cameraId: string) {
+    this.cancelled.add(cameraId);
+    this.relayGeneration.set(cameraId, (this.relayGeneration.get(cameraId) ?? 0) + 1);
+    const timer = this.pendingRecovery.get(cameraId);
+    if (timer) {
+      clearTimeout(timer);
+      this.recordRecovery(cameraId, "cancelled", "Operator stopped relay or restarted it manually.");
+    }
+    this.pendingRecovery.delete(cameraId);
+    this.recoveryDueAt.delete(cameraId);
+    this.retryCounts.delete(cameraId);
+  }
+
+  private scheduleRecovery(cameraId: string, streamKey: string) {
+    if (!this.recoveryEnabled || this.cancelled.has(cameraId) || this.pendingRecovery.has(cameraId)) return;
+    if (!this.captureIsActive(cameraId)) {
+      this.recordRecovery(cameraId, "skipped", "Capture is no longer active; relay was not restarted.");
+      return;
+    }
+    const now = Date.now();
+    const previous = this.retryCounts.get(cameraId);
+    const state = previous && now - previous.firstAt < this.retryWindowMs ? previous : { attempts: 0, firstAt: now };
+    if (state.attempts >= this.retryLimit) {
+      this.recordRecovery(cameraId, "exhausted", "Retry budget exhausted; manual intervention required.");
+      console.error(`YouTube relay [${cameraId}]: recovery limit reached; manual intervention required.`);
+      return;
+    }
+    const delay = this.retryDelaysMs[state.attempts];
+    state.attempts++;
+    this.retryCounts.set(cameraId, state);
+    this.recordRecovery(cameraId, "scheduled", `Retry ${state.attempts}/${this.retryLimit} in ${delay / 1000}s.`);
+    this.recoveryDueAt.set(cameraId, new Date(now + delay).toISOString());
+    const generation = this.relayGeneration.get(cameraId) ?? 0;
+    const timer = setTimeout(() => {
+      this.pendingRecovery.delete(cameraId);
+      this.recoveryDueAt.delete(cameraId);
+      if (this.cancelled.has(cameraId) || this.relayGeneration.get(cameraId) !== generation || this.sessions.has(cameraId)) return;
+      if (!this.captureIsActive(cameraId)) {
+        this.recordRecovery(cameraId, "skipped", "Capture stopped before retry; no relay started.");
+        return;
+      }
+      this.recordRecovery(cameraId, "attempt", `Starting retry ${state.attempts}/${this.retryLimit}.`);
+      try { this.start(cameraId, streamKey, true); }
+      catch (error) {
+        this.recordRecovery(cameraId, "failed", "Failed to start relay retry.");
+        console.error(`YouTube relay [${cameraId}]: recovery failed: ${sanitizeRelayError(error instanceof Error ? error.message : String(error), streamKey)}`);
+        this.scheduleRecovery(cameraId, streamKey);
+      }
+    }, delay);
+    timer.unref?.();
+    this.pendingRecovery.set(cameraId, timer);
+  }
 
   list() {
     return [...this.sessions.values()].map(({ cameraId, startedAt, status, lastProgressAt, error }) => ({
@@ -51,7 +139,8 @@ export class YouTubeStreamManager {
     return this.list().find((item) => item.cameraId === cameraId);
   }
 
-  start(cameraId: string, streamKey: string): void {
+  start(cameraId: string, streamKey: string, recovering = false): void {
+    if (!recovering) { this.cancelRecovery(cameraId); this.cancelled.delete(cameraId); }
     if (!cameraId.trim()) throw new Error("Camera ID is required.");
     if (this.sessions.has(cameraId)) throw new Error("Stream already running.");
     if (!/^[A-Za-z0-9_-]{8,256}$/.test(streamKey)) {
@@ -74,9 +163,11 @@ export class YouTubeStreamManager {
     const session: StreamSession = {
       cameraId, child, startedAt: new Date().toISOString(),
       status: "connecting", lastProgressAt: null, error: null, stopping: false,
-      stopPromise: null, lastProgressFrame: 0, lastProgressOutTimeUs: 0
+      stopPromise: null, lastProgressFrame: 0, lastProgressOutTimeUs: 0,
+      retryCount: this.retryCounts.get(cameraId)?.attempts ?? 0, retryTimer: null, streamKey, generation: Date.now()
     };
     this.sessions.set(cameraId, session);
+    guardFfmpegPipes(child, error => { if (!session.stopping) session.error = sanitizeRelayError(error.message, streamKey); });
 
     let progressBuffer = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -93,6 +184,9 @@ export class YouTubeStreamManager {
           if (value > 0) {
             session.lastProgressOutTimeUs = value;
             session.lastProgressAt = Date.now();
+            if (session.status !== "live" && session.retryCount > 0) {
+              this.recordRecovery(cameraId, "reconnected", "FFmpeg resumed local output; YouTube ingest remains unverified.");
+            }
             session.status = "live";
           }
         }
@@ -133,19 +227,25 @@ export class YouTubeStreamManager {
     child.on("error", (error) => {
       session.error = sanitizeRelayError(error.message, streamKey);
       session.status = "error";
+      // The close event still owns cleanup and recovery scheduling.
     });
     child.on("close", (code) => {
       if (stderrBuffer.trim()) reportRelayLine(stderrBuffer);
       if (ignoredStartupDecoderLines > 0) console.info(`YouTube relay [${cameraId}]: ignored ${ignoredStartupDecoderLines} expected startup decoder messages.`);
       this.lastExits.set(cameraId, { at: new Date().toISOString(), code, error: session.error });
       if (this.sessions.get(cameraId) === session) this.sessions.delete(cameraId);
-      if (!session.stopping) console.error(`YouTube relay stopped [${cameraId}], code ${code}`);
+      if (!session.stopping) {
+        console.error(`YouTube relay stopped [${cameraId}], code ${code}`);
+        this.scheduleRecovery(cameraId, streamKey);
+      }
     });
   }
 
   async stop(cameraId: string): Promise<boolean> {
+    const hadPendingRecovery = this.pendingRecovery.has(cameraId);
+    this.cancelRecovery(cameraId);
     const session = this.sessions.get(cameraId);
-    if (!session) return false;
+    if (!session) return hadPendingRecovery;
     if (session.stopPromise) { await session.stopPromise; return true; }
     session.stopping = true;
     session.stopPromise = new Promise<void>((resolve, reject) => {
@@ -170,11 +270,14 @@ export class YouTubeStreamManager {
       } else session.child.kill();
     });
     try { await session.stopPromise; }
-    finally { if (this.sessions.get(cameraId) === session) this.sessions.delete(cameraId); }
+    finally {
+      if ((session.child.exitCode !== null || session.child.signalCode !== null) && this.sessions.get(cameraId) === session) this.sessions.delete(cameraId);
+      else if (this.sessions.get(cameraId) === session) session.stopPromise = null;
+    }
     return true;
   }
 
   async stopAll(): Promise<void> {
-    await Promise.all([...this.sessions.keys()].map((id) => this.stop(id)));
+    await Promise.all([...new Set([...this.sessions.keys(), ...this.pendingRecovery.keys()])].map((id) => this.stop(id)));
   }
 }

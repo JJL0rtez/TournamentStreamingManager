@@ -15,13 +15,14 @@ export class RecordingManager {
   private sessions = new Map<string, RecordingSession>();
   private pendingMicrophones = new Set<string>();
   private pendingCameras = new Set<string>();
+  private pendingIds = new Set<string>();
 
 
   async start(
     cameraId: string,
     config: RecordingConfig
   ): Promise<RecordingSession> {
-    if (this.recorders.has(cameraId)) {
+    if (this.recorders.has(cameraId) || this.pendingIds.has(cameraId)) {
       throw new Error(`Camera ${cameraId} is already recording.`);
     }
 
@@ -58,6 +59,7 @@ export class RecordingManager {
       );
     }
 
+    this.pendingIds.add(cameraId);
     this.pendingCameras.add(config.cameraName);
 
     this.pendingMicrophones.add(config.microphoneName);
@@ -91,6 +93,7 @@ export class RecordingManager {
     };
 
 
+      if (!recorder.isRecording) throw new Error(`Recording ${cameraId} exited during startup.`);
       this.sessions.set(cameraId, session);
       return session;
 
@@ -103,6 +106,7 @@ export class RecordingManager {
       throw error;
     
     } finally {
+      this.pendingIds.delete(cameraId);
       this.pendingCameras.delete(config.cameraName);
       this.pendingMicrophones.delete(config.microphoneName);
     }
@@ -118,8 +122,10 @@ export class RecordingManager {
     }
 
     await recorder.stop();
-    this.recorders.delete(cameraId);
-    this.sessions.delete(cameraId);
+    if (this.recorders.get(cameraId) === recorder) {
+      this.recorders.delete(cameraId);
+      this.sessions.delete(cameraId);
+    }
   }
 
  private withDuration(session: RecordingSession): RecordingSession {

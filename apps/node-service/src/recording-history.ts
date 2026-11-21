@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
 
 export interface RecordingHistoryEntry {
@@ -54,19 +54,40 @@ export async function inspectRecordingSegments(recordingPath: string, active: bo
   const first = path.basename(recordingPath);
   if (!first.endsWith("_0000.mkv")) return { status: "unknown", segments: [], issues: ["Unsupported filename pattern"] };
   const prefix = first.slice(0, -"0000.mkv".length);
-  const names = (await readdir(directory)).filter(name =>
+  let directoryEntries: string[];
+  try { directoryEntries = await readdir(directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "warning", segments: [], issues: ["Recording directory no longer exists"], totalBytes: 0 };
+    }
+    throw error;
+  }
+  const names = directoryEntries.filter(name =>
     name.startsWith(prefix) && /^\d{4,}\.mkv$/.test(name.slice(prefix.length))
   ).sort((a, b) => Number(a.slice(prefix.length, -4)) - Number(b.slice(prefix.length, -4)));
   const segments = await Promise.all(names.map(async name => {
-    const info = await stat(path.join(directory, name));
-    return { name, bytes: info.size, modifiedAt: info.mtime.toISOString(),
-      index: Number(name.slice(prefix.length, -4)) };
+    try {
+      const info = await lstat(path.join(directory, name));
+      return { name, bytes: info.size, modifiedAt: info.mtime.toISOString(),
+        index: Number(name.slice(prefix.length, -4)), regularFile: info.isFile() && !info.isSymbolicLink() };
+    } catch {
+      return { name, bytes: 0, modifiedAt: "", index: Number(name.slice(prefix.length, -4)), regularFile: false };
+    }
   }));
   const issues: string[] = [];
   if (!segments.length) issues.push("No segment files found");
+  let expectedIndex = 0;
   segments.forEach((segment, i) => {
-    if (segment.index !== i) issues.push(`Missing segment ${String(i).padStart(4, "0")} before ${segment.name}`);
-    if (segment.bytes === 0 && !(active && i === segments.length - 1)) issues.push(`Empty segment: ${segment.name}`);
+    if (segment.index > expectedIndex) {
+      const missingEnd = segment.index - 1;
+      issues.push(expectedIndex === missingEnd
+        ? `Missing segment index ${expectedIndex} before ${segment.name}`
+        : `Missing segment indices ${expectedIndex}-${missingEnd} before ${segment.name}`);
+    }
+    if (segment.index !== i) issues.push(`Unexpected segment index ${segment.index} at position ${i}: ${segment.name}`);
+    expectedIndex = Math.max(expectedIndex, segment.index + 1);
+    if (!segment.regularFile) issues.push(`Not a regular recording file: ${segment.name}`);
+    if (segment.bytes === 0 && !(active && i === segments.length - 1 && segment.regularFile)) issues.push(`Empty segment: ${segment.name}`);
   });
   return { status: issues.length ? "warning" : active ? "recording" : "ok", segments, issues,
     totalBytes: segments.reduce((total, segment) => total + segment.bytes, 0),

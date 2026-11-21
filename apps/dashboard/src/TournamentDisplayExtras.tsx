@@ -1,5 +1,6 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import './TournamentDisplayExtras.css';
+import { SponsorPlayback } from './SponsorPlayback';
 export type ScheduleRow={event:string;time:string};
 export type ScheduleRing={ring:string;rows:ScheduleRow[]};
 export type DisplayConfig={schedule:ScheduleRing[];cameraSeconds:number;motionThreshold:number;sponsorEvery:number;sponsorVideos:string[]};
@@ -10,44 +11,69 @@ function saveConfig(v:DisplayConfig){localStorage.setItem(STORAGE,JSON.stringify
 export function ScheduleDisplay({rings,eventName}:{rings:ScheduleRing[];eventName:string}){return <section className="td-schedule"><h1>{eventName} | Ring Assignments</h1><div className="td-schedule-grid">{rings.map((ring,i)=><table key={`${ring.ring}-${i}`}><thead><tr><th colSpan={2}>{ring.ring}</th></tr></thead><tbody>{ring.rows.map((r,j)=><tr key={j}><td>{r.event}</td><td>{r.time}</td></tr>)}</tbody></table>)}</div></section>;}
 
 type Camera={cameraId:string;cameraName:string;ring:string};
-type Sample={url:string;score:number;updated:number;status:'ready'|'starting'|'error';error?:string};
-const jpegUrl=(id:string)=>`/api/previews/${encodeURIComponent(id)}/frame?ts=${Date.now()}`;
-// A low-resolution centre crop is compared against the previous sample for the same camera.
-function centrePixels(img:HTMLImageElement):Uint8ClampedArray{const c=document.createElement('canvas');c.width=48;c.height=48;const ctx=c.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('Canvas unavailable');const w=img.naturalWidth,h=img.naturalHeight;const side=Math.min(w,h)*.5;ctx.drawImage(img,(w-side)/2,(h-side)/2,side,side,0,0,48,48);return ctx.getImageData(0,0,48,48).data;}
+type Sample={score:number;updated:number};
+// Compare small centre crops from existing feeds, never open a DirectShow input.
+function centrePixels(img:ImageBitmap):Uint8ClampedArray{const c=document.createElement('canvas');c.width=48;c.height=48;const ctx=c.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('Canvas unavailable');const w=img.width,h=img.height;const side=Math.min(w,h)*.5;ctx.drawImage(img,(w-side)/2,(h-side)/2,side,side,0,0,48,48);return ctx.getImageData(0,0,48,48).data;}
 function difference(a:Uint8ClampedArray,b:Uint8ClampedArray){let sum=0;for(let i=0;i<a.length;i+=4)sum+=(Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]))/3;return sum/(a.length/4);}
-export function CameraRotation({cameras,config}:{cameras:Camera[];config:DisplayConfig}){
+export function CameraRotation({cameras,config,fullscreen=false}:{cameras:Camera[];config:DisplayConfig;fullscreen?:boolean}){
  const [samples,setSamples]=useState<Record<string,Sample>>({});
  const [selected,setSelected]=useState('');
+ const [pinned,setPinned]=useState('');
  const [sponsor,setSponsor]=useState(-1);
- const [message,setMessage]=useState('Starting camera previews...');
+ const [visible,setVisible]=useState(!document.hidden);
+ const [feedAttempt,setFeedAttempt]=useState(0);
+ const [feedFailed,setFeedFailed]=useState(false);
  const last=useRef(new Map<string,Uint8ClampedArray>());
- const current=useRef('');const due=useRef(Date.now());const changes=useRef(0);const busy=useRef(false);
+ const due=useRef(0);const changes=useRef(0);
  const cameraIds=useMemo(()=>cameras.map(c=>c.cameraId).join('\u0001'),[cameras]);
- const cameraRef=useRef(cameras);cameraRef.current=cameras;
- const samplesRef=useRef(samples);samplesRef.current=samples;
- const sponsorRef=useRef(sponsor);sponsorRef.current=sponsor;
- useEffect(()=>{const available=cameraRef.current;if(!available.some(c=>c.cameraId===current.current)){current.current=available[0]?.cameraId||'';setSelected(current.current);due.current=Date.now()+config.cameraSeconds*1000;}},[cameraIds,config.cameraSeconds]);
- // Start independent preview processes on the server. This does not start YouTube streams or recordings.
- useEffect(()=>{let active=true;const list=cameraRef.current;async function start(){for(const c of list){if(!active)return;try{const r=await fetch('/api/previews/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cameraId:c.cameraId,cameraName:c.cameraName||c.ring||c.cameraId})});if(!r.ok&&r.status!==409){const data=await r.json().catch(()=>({}));setMessage(`Preview ${c.ring}: ${data.error||r.status}`);}}catch(e){setMessage(`Preview start failed: ${String(e)}`);}}}void start();return()=>{active=false;};},[cameraIds]);
- // Poll every eligible camera, not only the one on the public display.
- useEffect(()=>{let active=true;async function sample(){if(busy.current)return;busy.current=true;try{await Promise.all(cameraRef.current.map(async c=>{try{const r=await fetch(jpegUrl(c.cameraId),{cache:'no-store'});if(!r.ok)throw Error(`HTTP ${r.status}`);const blob=await r.blob();const url=URL.createObjectURL(blob);const img=new Image();try{await new Promise<void>((resolve,reject)=>{img.onload=()=>resolve();img.onerror=()=>reject(Error('Invalid JPEG'));img.src=url;});const pixels=centrePixels(img);const prev=last.current.get(c.cameraId);const score=prev?difference(prev,pixels):0;last.current.set(c.cameraId,pixels);if(active)setSamples(s=>({...s,[c.cameraId]:{url,score,updated:Date.now(),status:'ready'}}));else URL.revokeObjectURL(url);}catch(e){URL.revokeObjectURL(url);throw e;}}catch(e){if(active)setSamples(s=>({...s,[c.cameraId]:{...s[c.cameraId],url:s[c.cameraId]?.url||'',score:0,updated:s[c.cameraId]?.updated||0,status:'error',error:String(e)}}));}}));}finally{busy.current=false;}}
- void sample();const t=setInterval(()=>void sample(),1500);return()=>{active=false;clearInterval(t);};},[cameraIds]);
- // Revoke replaced object URLs after React commits them; avoid leaking one blob every poll.
- const oldUrls=useRef<Record<string,string>>({});useEffect(()=>{for(const [id,url] of Object.entries(oldUrls.current)){if(samples[id]?.url!==url)URL.revokeObjectURL(url);}oldUrls.current=Object.fromEntries(Object.entries(samples).map(([id,v])=>[id,v.url]).filter(([,v])=>v));},[samples]);
- useEffect(()=>()=>{for(const url of Object.values(oldUrls.current))URL.revokeObjectURL(url);},[]);
- useEffect(()=>{const t=setInterval(()=>{if(sponsorRef.current>=0||Date.now()<due.current||!cameraRef.current.length)return;const now=Date.now();const ready=cameraRef.current.filter(c=>samplesRef.current[c.cameraId]?.status==='ready'&&now-samplesRef.current[c.cameraId].updated<6000);if(!ready.length){setMessage('Waiting for camera frames. Check preview status and camera assignments.');return;}
- // Prefer a camera above threshold. If none qualifies, use the highest movement score.
- const eligible=ready.filter(c=>samplesRef.current[c.cameraId].score>=config.motionThreshold);
- const pool=eligible.length?eligible:ready;
- const ranked=[...pool].sort((a,b)=>samplesRef.current[b.cameraId].score-samplesRef.current[a.cameraId].score);
- const next=ranked.find(c=>c.cameraId!==current.current)||ranked[0];
- if(!next)return;current.current=next.cameraId;setSelected(next.cameraId);due.current=now+config.cameraSeconds*1000;changes.current++;setMessage(eligible.length?'Switched to active camera':'No camera met threshold; showing highest movement');
- if(config.sponsorEvery>0&&config.sponsorVideos.length&&changes.current%config.sponsorEvery===0){setSponsor((Math.floor(changes.current/config.sponsorEvery)-1)%config.sponsorVideos.length);}
- },500);return()=>clearInterval(t);},[config.cameraSeconds,config.motionThreshold,config.sponsorEvery,config.sponsorVideos]);
+ useEffect(()=>{const update=()=>setVisible(!document.hidden);document.addEventListener('visibilitychange',update);return()=>document.removeEventListener('visibilitychange',update);},[]);
+ // All requests are read-only. Closing, hiding or leaving the view releases its network requests;
+ // manually started previews and production captures remain under their original operator's control.
+ useEffect(()=>{
+   if(!visible){setSamples({});last.current.clear();return;}
+   let active=true;let controller:AbortController|null=null;let timer:ReturnType<typeof setTimeout>|undefined;
+   const allowed=new Set(cameraIds.split('\u0001').filter(Boolean));
+   async function poll(){
+     controller=new AbortController();const signal=controller.signal;
+     const timeout=setTimeout(()=>controller?.abort(),5000);
+     try{
+       const result=await fetch('/api/display-sources',{cache:'no-store',signal});
+       if(!result.ok)throw Error('Display sources unavailable');
+       const data=await result.json();
+       const ids:string[]=Array.isArray(data.cameraIds)?[...new Set<string>(data.cameraIds.filter((id:unknown):id is string=>typeof id==='string'&&allowed.has(id)))].slice(0,8):[];
+       const next:Record<string,Sample>={};
+       // Motion probes only read existing buffered frames; inactive cameras are never started.
+       await Promise.all(ids.map(async id=>{try{
+         const r=await fetch(`/api/display-frame/${encodeURIComponent(id)}`,{cache:'no-store',signal});if(!r.ok)return;
+         const img=await createImageBitmap(await r.blob());
+         try{if(!active||signal.aborted)return;const pixels=centrePixels(img);const prev=last.current.get(id);next[id]={score:prev?difference(prev,pixels):0,updated:Date.now()};last.current.set(id,pixels);}finally{img.close();}
+       }catch{/* unavailable feed is excluded */}}));
+       if(active&&!signal.aborted){for(const id of last.current.keys())if(!next[id])last.current.delete(id);setSamples(next);}
+       else if(active)setSamples({});
+     }catch{if(active)setSamples({});}
+     finally{clearTimeout(timeout);if(active)timer=setTimeout(()=>void poll(),2000);}
+   }
+   void poll();return()=>{active=false;controller?.abort();if(timer)clearTimeout(timer);last.current.clear();};
+ },[cameraIds,visible]);
+ useEffect(()=>{
+   if(!visible||sponsor>=0)return;
+   const ready=cameras.filter(c=>samples[c.cameraId]&&Date.now()-samples[c.cameraId].updated<8000);
+   if(pinned){if(selected!==pinned){setSelected(pinned);setFeedAttempt(n=>n+1);setFeedFailed(false);}return;}
+   if(!ready.length){if(selected)setSelected('');return;}
+   if(ready.some(c=>c.cameraId===selected)&&Date.now()<due.current)return;
+   const eligible=ready.filter(c=>samples[c.cameraId].score>=config.motionThreshold);
+   const ranked=[...(eligible.length?eligible:ready)].sort((a,b)=>samples[b.cameraId].score-samples[a.cameraId].score);
+   const next=ranked.find(c=>c.cameraId!==selected)||ranked[0];
+   if(next.cameraId!==selected){setSelected(next.cameraId);setFeedAttempt(n=>n+1);setFeedFailed(false);if(selected){changes.current++;if(config.sponsorEvery>0&&config.sponsorVideos.length&&changes.current%config.sponsorEvery===0)setSponsor((Math.floor(changes.current/config.sponsorEvery)-1)%config.sponsorVideos.length);}}
+   due.current=Date.now()+config.cameraSeconds*1000;
+ },[cameras,samples,visible,pinned,selected,sponsor,config.cameraSeconds,config.motionThreshold,config.sponsorEvery,config.sponsorVideos]);
+ // A failed MJPEG connection is retried only while the camera is still available.
+ useEffect(()=>{if(!visible||!selected||sponsor>=0)return;if(!feedFailed)return;const t=setTimeout(()=>{setFeedAttempt(n=>n+1);setFeedFailed(false);},3000);return()=>clearTimeout(t);},[selected,visible,sponsor,feedFailed]);
  function finishSponsor(){setSponsor(-1);due.current=Date.now()+config.cameraSeconds*1000;}
- const shown=cameras.find(c=>c.cameraId===selected)||cameras[0];const frame=shown&&samples[shown.cameraId];
- if(!cameras.length)return <div className="td-camera-empty">No eligible cameras. Assign cameras to rings and check the blacklist.</div>;
- return <section className="td-camera">{sponsor>=0?<video key={sponsor} src={config.sponsorVideos[sponsor]} autoPlay playsInline onEnded={finishSponsor} onError={finishSponsor} className="td-video"/>:<>{frame?.url?<img key={shown.cameraId} src={`/api/display-live/${encodeURIComponent(shown.cameraId)}`} alt="Live tournament camera" className="td-preview"/>:<p>Waiting for live camera feed. {message}</p>}</>}
-</section>;
+ const shown=cameras.find(c=>c.cameraId===selected&&samples[c.cameraId]);
+ return <section className="td-camera">
+ {!fullscreen&&<div className="td-display-selector"><label>Camera display <select value={pinned} onChange={e=>{setPinned(e.target.value);setSponsor(-1);due.current=0;}}><option value="">Automatic rotation</option>{cameras.map(c=><option key={c.cameraId} value={c.cameraId} disabled={!samples[c.cameraId]}>{c.ring} ({c.cameraName}){!samples[c.cameraId]?' - inactive':''}</option>)}</select></label></div>}
+ {!visible?null:sponsor>=0?<SponsorPlayback key={`${sponsor}:${config.sponsorVideos[sponsor]}`} src={config.sponsorVideos[sponsor]} onFinish={finishSponsor} className="td-video"/>:shown&&!feedFailed?<img key={`${shown.cameraId}:${feedAttempt}`} src={`/api/display-live/${encodeURIComponent(shown.cameraId)}?attempt=${feedAttempt}`} alt={`Live camera ${shown.ring}`} className="td-preview" onError={()=>setFeedFailed(true)}/>:<p>{!cameras.length?'No assigned cameras.':shown?'Reconnecting to camera feed...':pinned?'Selected camera is inactive. Start its preview, recording or stream from the dashboard.':'No active camera feeds. Start a preview, recording or stream from the dashboard.'}</p>}
+ </section>;
 }
 export function DisplayConfigEditor({config,onChange}:{config:DisplayConfig;onChange:(v:DisplayConfig)=>void}){function update(v:DisplayConfig){onChange(v);saveConfig(v);}return <section className="td-editor"><h3>Legacy local display settings</h3><p>Camera rotation and ring slides are configured in their dedicated editors.</p><button onClick={()=>update(DEFAULT_DISPLAY)}>Reset local legacy settings</button></section>;}

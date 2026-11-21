@@ -1,0 +1,20 @@
+{
+  "durationSeconds": 105,
+  "intervalSeconds": 5,
+  "timeoutMs": 3000,
+  "endpoints": [
+    {
+      "id": "main-node",
+      "url": "http://127.0.0.1:3001/api/health",
+      "expectedStatus": 200
+    }
+  ],
+  "recordings": [
+    {
+      "id": "ring1",
+      "path": "D:\\TournamentTest\\ring1.mkv",
+      "minGrowthBytes": 1048576
+    }
+  ],
+  "initialMissingGraceSamples": 2
+}

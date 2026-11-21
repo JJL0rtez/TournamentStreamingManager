@@ -1,0 +1,18 @@
+{
+  "hostId": "PC1",
+  "recordings": "D:\\TournamentRecordings",
+  "output": "../reports/PC1",
+  "phases": [
+    "readiness",
+    "stress",
+    "multicam",
+    "observer"
+  ],
+  "minFreeGb": 100,
+  "stressMiB": 512,
+  "minMiBps": 25,
+  "multicamConfig": "multicam.example.json",
+  "observerPlan": "observer.example.json",
+  "autoObserveRecordings": true,
+  "phaseTimeoutSeconds": 900
+}

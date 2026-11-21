@@ -1,0 +1,17 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {validatePlan as validateObserver,evaluate} from '../tools/tournament-observer.mjs';
+import {validatePlan as validateDeploy,deriveObserverPlan,runDeployment} from '../tools/tournament-deploy.mjs';
+const plan=()=>validateObserver({endpoints:[],recordings:[{id:'cam',path:'x.mkv'}],initialMissingGraceSamples:2});
+const samples=values=>values.map((bytes,i)=>({timestamp:new Date(i*1000).toISOString(),endpoints:[],recordings:[{id:'cam',exists:bytes!==null,bytes:bytes??0}]}));
+test('observer rejects empty plans that could pass without checking anything',()=>assert.throws(()=>validateObserver({endpoints:[],recordings:[]}),/at least one/));
+test('recording growth must occur after grace samples, not just before them',()=>assert.equal(evaluate(samples([0,200,200,200]),plan()).status,'fail'));
+test('recording growth after grace samples passes',()=>assert.equal(evaluate(samples([null,null,0,200]),plan()).status,'pass'));
+test('only one post-grace sample cannot prove growth',()=>assert.equal(evaluate(samples([null,null,200]),plan()).status,'fail'));
+test('missing post-grace recording fails',()=>assert.equal(evaluate(samples([null,null,0,null]),plan()).status,'fail'));
+test('auto observation requires both phases',()=>assert.throws(()=>validateDeploy({hostId:'PC1',recordings:'r',output:'o',phases:['multicam'],multicamConfig:'cams.json',observerPlan:'obs.json',autoObserveRecordings:true}),/phases/));
+test('too short capture cannot be observed concurrently',()=>assert.throws(()=>deriveObserverPlan({endpoints:[],recordings:[]},{cameras:[{id:'cam'}],durationSeconds:10},'/tmp/out'),/at least 15/));
+test('malformed report status cannot be treated as pass',async()=>{const base=await mkdtemp(join(tmpdir(),'b58-'));const p=validateDeploy({hostId:'PC1',recordings:'r',output:'o',phases:['readiness']});const result=await runDeployment(p,{base,run:async(_script,args)=>{await writeFile(args.at(-1),JSON.stringify({status:'unexpected'}));return {ok:true,code:0};}});assert.equal(result.status,'fail');});

@@ -1,0 +1,7 @@
+{
+  "licenseId": "license-march2027-001",
+  "eventId": "march2027",
+  "issuedAt": "2026-11-19T12:00:00.000Z",
+  "validUntil": "2027-04-01T12:00:00.000Z",
+  "allowedNodeIds": ["host-main", "host-second"]
+}

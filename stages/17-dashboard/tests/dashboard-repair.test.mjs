@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {repairSource,applyFile} from '../scripts/integration/repair-dashboard.mjs';
+const stub=`import { useEffect, useState } from "react";\nfunction NodeDashboard(){const x=useCallback(()=>1,[]);useEffect(()=>{},[]);return x;}`;
+test('missing useCallback is imported',()=>{const x=repairSource(stub);assert.match(x.source,/import \{[^}]*useCallback[^}]*\} from "react"/);});
+test('repair is idempotent',()=>{const once=repairSource(stub).source;assert.equal(repairSource(once).source,once);});
+test('existing hook import is unchanged',()=>{const x=repairSource('import { useCallback } from "react";\nuseCallback(()=>{},[]);');assert.equal(x.fixes.length,0);});
+test('creates React import when missing',()=>{assert.match(repairSource('const fn=useCallback(()=>{},[]);').source,/^import \{ useCallback \} from "react";/);});
+test('preserves remote safety warning',()=>{assert.equal(repairSource('function NodeDashboard(){}; // Remote nodes are read-only in this dashboard').warnings.length,1);});
+test('backs up and modifies file safely',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tsm-repair-'));try{const file=path.join(dir,'App.tsx');fs.writeFileSync(file,stub);const r=applyFile(file);assert.ok(r.changed);assert.ok(fs.existsSync(r.backup));assert.equal(fs.readFileSync(r.backup,'utf8'),stub);assert.equal(applyFile(file).changed,false);}finally{fs.rmSync(dir,{recursive:true,force:true});}});
+test('check mode does not modify file',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tsm-check-'));try{const file=path.join(dir,'App.tsx');fs.writeFileSync(file,stub);assert.equal(applyFile(file,{check:true}).changed,true);assert.equal(fs.readFileSync(file,'utf8'),stub);}finally{fs.rmSync(dir,{recursive:true,force:true});}});

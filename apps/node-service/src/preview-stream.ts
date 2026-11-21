@@ -1,9 +1,10 @@
+import { guardFfmpegPipes, requestFfmpegQuit } from "./ffmpeg-pipes.js";
+import { PreviewJpegParser } from "./preview-jpeg.js";
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 export class PreviewStream {
   private process: ChildProcessWithoutNullStreams | null = null;
-  private buffer = Buffer.alloc(0);
   private latestFrame: Buffer | null = null;
 
   start(cameraName: string): void {
@@ -11,7 +12,6 @@ export class PreviewStream {
       throw new Error("Preview stream is already running.");
     }
 
-    this.buffer = Buffer.alloc(0);
     this.latestFrame = null;
 
     const ffmpeg = spawn("ffmpeg", [
@@ -32,29 +32,19 @@ export class PreviewStream {
 
     this.process = ffmpeg;
 
-    ffmpeg.stdout.on("data", (chunk: Buffer) => {
-      this.buffer = Buffer.concat([this.buffer, chunk]);
-
-      while (true) {
-        const start = this.buffer.indexOf(Buffer.from([0xff, 0xd8]));
-        const end = this.buffer.indexOf(Buffer.from([0xff, 0xd9]), start + 2);
-
-        if (start === -1 || end === -1) {
-          break;
-        }
-
-        this.latestFrame = Buffer.from(this.buffer.subarray(start, end + 2));
-        this.buffer = this.buffer.subarray(end + 2);
-      }
-    });
-
+    guardFfmpegPipes(ffmpeg);
+    const parser = new PreviewJpegParser();
+    ffmpeg.stdout.on("data", (chunk: Buffer) => parser.push(chunk, frame => { this.latestFrame = frame; }));
+    ffmpeg.on("error", error => console.warn("Legacy preview process failed:", error.message));
     ffmpeg.stderr.on("data", (chunk: Buffer) => {
       console.error("Preview FFmpeg:", chunk.toString());
     });
 
     ffmpeg.on("close", () => {
-      this.process = null;
-      this.buffer = Buffer.alloc(0);
+      if (this.process === ffmpeg) {
+        this.process = null;
+        this.latestFrame = null;
+      }
       console.log("Preview process stopped.");
     });
   }
@@ -65,7 +55,7 @@ export class PreviewStream {
 
   stop(): void {
     if (this.process) {
-      this.process.stdin.write("q\n");
+      requestFfmpegQuit(this.process);
     }
   }
 }

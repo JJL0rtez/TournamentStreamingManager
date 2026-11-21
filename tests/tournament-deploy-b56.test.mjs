@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {validatePlan,schedulePhases,runDeployment} from '../tools/tournament-deploy.mjs';
+const plan=(phases=['readiness','stress','multicam','observer'])=>validatePlan({hostId:'PC1',recordings:'recordings',output:'reports',phases,multicamConfig:'cams.json',observerPlan:'observer.json'});
+test('default pairs observer and multicam while keeping prerequisites ordered',()=>assert.deepEqual(schedulePhases(plan()),[['readiness'],['stress'],['observer','multicam']]));
+test('explicit sequential observation is preserved',()=>assert.deepEqual(schedulePhases({...plan(),observerMode:'sequential'}),[['readiness'],['stress'],['multicam'],['observer']]));
+test('observer without multicam is independent',()=>assert.deepEqual(schedulePhases(plan(['readiness','observer'])),[['readiness'],['observer']]));
+test('observer before multicam still pairs once',()=>assert.deepEqual(schedulePhases(plan(['observer','readiness','multicam'])),[['readiness'],['observer','multicam']]));
+test('reject invalid observation mode',()=>assert.throws(()=>validatePlan({...plan(),observerMode:'overlap'}),/observerMode/));
+test('reject invalid phase timeout',()=>assert.throws(()=>validatePlan({...plan(),phaseTimeoutSeconds:1}),/phaseTimeoutSeconds/));
+test('reject invalid disk threshold',()=>assert.throws(()=>validatePlan({...plan(),minMiBps:-1}),/minMiBps/));
+test('dry-run exposes actual concurrency groups',async()=>{const r=await runDeployment(plan(),{dryRun:true});assert.deepEqual(r.groups.at(-1),['observer','multicam']);});
+test('parallel group actually runs concurrently and creates HTML and JSON',async()=>{
+ const base=await mkdtemp(join(tmpdir(),'tsm56-'));let active=0,peak=0;
+ const run=async(_script,args)=>{active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,1700));const report=args[args.indexOf('--report')+1];await mkdir(join(base,'reports'),{recursive:true});await writeFile(report,JSON.stringify({status:'pass'}));active--;return {ok:true,code:0,log:''};};
+ const p=plan(['multicam','observer']);const result=await runDeployment(p,{base,run});assert.equal(peak,2);assert.equal(result.status,'pass');assert.equal(result.results.length,2);assert.match(await readFile(result.htmlPath,'utf8'),/html/i);
+});
+test('missing report is a hard failure',async()=>{const base=await mkdtemp(join(tmpdir(),'tsm56-'));const result=await runDeployment(plan(['readiness']),{base,run:async()=>({ok:true,code:0,log:''})});assert.equal(result.status,'fail');assert.ok(result.results[0].reportError);});
+test('failed subprocess cannot be overridden by pass report',async()=>{const base=await mkdtemp(join(tmpdir(),'tsm56-'));const result=await runDeployment(plan(['readiness']),{base,run:async(_script,args)=>{await writeFile(args.at(-1),JSON.stringify({status:'pass'}));return {ok:false,code:1};}});assert.equal(result.status,'fail');});

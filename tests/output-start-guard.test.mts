@@ -1,0 +1,11 @@
+import {test} from "node:test";
+import {strict as assert} from "node:assert";
+import {evaluateOutputStart,summarizeOutputRoutes} from "../apps/node-service/src/output-start-guard.ts";
+const check=(mode:unknown, requested:unknown[], active:string[]=[], enforce=false)=>evaluateOutputStart({requestedMode:mode,cameraIds:requested,activeCameraIds:active,enforcementEnabled:enforce});
+test("legacy clean production unchanged without opt-in",()=>assert.equal(check(undefined,["ring-1","ring-2"]).allowed,true));
+test("diagnostic cannot enter unwatermarked routes",()=>assert.equal(check("diagnostic",["ring-1"]).code,"DIAGNOSTIC_PIPELINE_NOT_READY"));
+test("reject unknown mode",()=>assert.equal(check("test",["ring-1"]).status,400));
+test("one free ring can stream and record",()=>assert.equal(check("production",["ring-1"],["ring-1"],true).allowed,true));
+test("second clean ring blocked when enabled",()=>assert.equal(check("production",["ring-2"],["ring-1"],true).status,403));
+test("bulk start blocked when enabled",()=>assert.equal(check(undefined,["ring-1","ring-2"],[],true).allowed,false));
+test("readiness clearly reports unimplemented features",()=>{const r=summarizeOutputRoutes({enforcementEnabled:false,diagnosticWatermarkReady:false,activeCameraIds:[]});assert.equal(r.commercialLicensingReady,false);assert.equal(r.guardedStartRoutes.length,5)});

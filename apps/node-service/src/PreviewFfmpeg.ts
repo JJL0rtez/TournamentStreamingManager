@@ -4,7 +4,7 @@ export function buildPreviewFfmpegArgs(
 ): string[] {
   return [
     "-hide_banner",
-    "-loglevel", "warning",
+    "-loglevel", "error",
 
     "-f", "dshow",
     "-rtbufsize", "256M",

@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const app = fs.readFileSync(new URL('../apps/dashboard/src/App.tsx', import.meta.url), 'utf8');
+const ui = fs.readFileSync(new URL('../apps/dashboard/src/DistributedRemoteControls.tsx', import.meta.url), 'utf8');
+test('passes assigned cameras to the remote operator panel', () => assert.match(app, /cameraIds=\{session\.assignments\.map\(assignment => assignment\.cameraId\)\}/));
+test('recovery route targets selected camera', () => assert.match(ui, /\/api\/captures\/\$\{encodeURIComponent\(camera\)\}\/recover/));
+test('relay restart route targets selected camera', () => assert.match(ui, /\/api\/youtube\/\$\{encodeURIComponent\(camera\)\}\/distributed-restart/));
+test('camera list is de-duplicated and constrained to assignments', () => assert.match(ui, /new Set\(cameraIds\.filter/));
+test('explicit confirmation before mutation', () => assert.match(ui, /window\.confirm\(`\$\{action\.warning\}/));
+test('single-flight lock before request', () => assert.match(ui, /inFlight\.current = true/));
+test('server error responses cannot report success', () => assert.match(ui, /result\.error \|\| result\.ok === false \|\| result\.success === false/));
+test('ambiguous response locks out further commands', () => assert.match(ui, /setUncertain\(true\)/));
+test('no automatic retry or background mutation', () => assert.doesNotMatch(ui, /setInterval|setTimeout|retry\(/));
+test('remote panel remounts for different node IDs', () => assert.match(app, /<DistributedRemoteControls key=\{node\.id\}/));

@@ -4,3 +4,36 @@
 .presentation-sponsor-image{max-width:min(70vw,850px);max-height:32vh;object-fit:contain;margin:1.5rem auto;display:block}.presentation-theme-blue{background:linear-gradient(140deg,#102c50,#0b5488);border-radius:16px}.presentation-theme-gold{background:linear-gradient(140deg,#3d2b11,#856323);border-radius:16px}.presentation-theme-dark{background:#05080d;border-radius:16px}.presentation-slide p{margin-top:1rem}.presentation-editor input[type=url]{width:100%;box-sizing:border-box}
 
 .presentation-asset-library{margin:20px 0;padding:12px;border:1px solid #637b97}.presentation-asset-library>div{display:flex;align-items:center;gap:14px;padding:8px;border-bottom:1px solid #536a82}.presentation-asset-library img{width:120px;height:70px;object-fit:contain;background:#fff}.presentation-asset-library span{flex:1}
+
+/* Batch 60: let the slide canvas use remaining viewport space rather than
+   stacking a viewport-height slide beneath the presentation toolbar. */
+.presentation-root{display:flex;flex-direction:column;box-sizing:border-box}
+.presentation-root>.presentation-content{flex:1 0 auto;min-height:0;box-sizing:border-box}
+.presentation-root.presentation-fullscreen>.presentation-content{flex:1 1 auto;min-height:0}
+
+/* v16 display pages: no stacked viewport-height content below the toolbar. */
+.presentation-root{background:#171717;min-height:100dvh;}
+.presentation-root>.presentation-toolbar{flex:0 0 auto;background:#232323;color:white;padding:10px 14px;border-bottom:1px solid #484848;}
+.presentation-toolbar button,.presentation-slide-controls button,.presentation-editor button{background:#383838;border-color:#666;color:#fff;}
+.presentation-toolbar input[type=checkbox]{accent-color:#d8ab55;}
+.presentation-connection{color:#b3b3b3;}
+.presentation-root>.presentation-content{flex:1 1 auto;min-height:0;padding:0;min-width:0;}
+.presentation-mode-schedule:not(.presentation-editing):not(.presentation-fullscreen)>.presentation-content{display:flex;flex-direction:column;}
+.presentation-root .presentation-slide{padding:20px;min-height:0;margin:0;}
+.presentation-mode-billboard:not(.presentation-editing)>.presentation-content{display:flex;flex-direction:column;justify-content:center;}
+.presentation-mode-cameras:not(.presentation-editing){height:100dvh;min-height:0;}
+.presentation-mode-cameras:not(.presentation-editing)>.presentation-content{display:flex;flex-direction:column;overflow:hidden;}
+.presentation-editor{background:#232323;color:white;}
+.presentation-edit-slide{border-color:#666;}
+
+/* v20: camera editor preview is a fixed 16:9 stage, one-quarter screen width.
+   Media changes cannot resize the stage or displace the settings below it. */
+.presentation-root.presentation-mode-cameras.presentation-editing>.presentation-camera-editor-preview{flex:0 0 auto;width:25%;min-width:0;max-width:100%;margin:12px auto 0;overflow-anchor:none;}
+.presentation-camera-editor-preview .td-camera{height:auto;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);aspect-ratio:16/10;overflow:hidden;border:1px solid #484848;border-radius:8px;}
+.presentation-camera-editor-preview .td-display-selector{padding:4px 8px;min-width:0;}
+.presentation-camera-editor-preview .td-display-selector label{font-size:12px;flex-wrap:nowrap;}
+.presentation-camera-editor-preview .td-display-selector select{min-width:0;font-size:12px;max-width:100%;}
+.presentation-camera-editor-preview .td-preview,.presentation-camera-editor-preview .td-video,.presentation-camera-editor-preview .ts-sponsor-playback{width:100%;height:100%;min-height:0;max-height:100%;object-fit:contain;}
+.presentation-camera-editor-preview .td-camera>p{font-size:12px;align-self:center;max-width:100%;padding:8px;margin:0;}
+.presentation-camera-editor-preview>.presentation-empty{margin:0;aspect-ratio:16/10;display:grid;place-content:center;font-size:14px;padding:8px;}
+@media(max-width:720px){.presentation-root.presentation-mode-cameras.presentation-editing>.presentation-camera-editor-preview{width:min(75%,320px);}}

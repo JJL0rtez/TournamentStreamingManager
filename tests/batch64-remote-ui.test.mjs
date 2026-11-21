@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const app = fs.readFileSync(new URL('../apps/dashboard/src/App.tsx', import.meta.url), 'utf8');
+const ui = fs.readFileSync(new URL('../apps/dashboard/src/DistributedRemoteControls.tsx', import.meta.url), 'utf8');
+test('remote distributed routes explicitly included in browser allowlist',()=>assert.match(app,/distributed-\(start-all\|stop-all\)/));
+test('distributed controls restricted to remote nodes',()=>assert.match(app,/!node\.local && <DistributedRemoteControls/));
+test('remote controls require session opt in',()=>assert.match(app,/enabled=\{remoteCaptureControlsEnabled\}/));
+test('single flight operation guard',()=>assert.match(ui,/\|\| pending \|\| uncertain/));
+test('network errors require operator verification',()=>assert.match(ui,/Do not retry until you inspect/));
+test('commands require operator confirmation',()=>assert.match(ui,/window\.confirm/));
+test('remote actions never silently replay',()=>assert.doesNotMatch(ui,/setInterval|setTimeout|retry\(/));
+test('start and stop actions for captures and youtube',()=>{for(const path of ['captures/distributed-start-all','captures/distributed-stop-all','youtube/distributed-start-all','youtube/distributed-stop-all']) assert.ok(ui.includes(path));});

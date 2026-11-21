@@ -1,9 +1,12 @@
+import { guardFfmpegPipes } from "./ffmpeg-pipes.js";
 
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { captureTransportPort } from "./capture-contract.js";
+import { SwitchableRecording } from "./switchable-recording.js";
+import { diagnosticVideoFilter } from "./diagnostic-watermark.js";
 
 
 // Input FPS determines the recording FPS. A camera must actually support the
@@ -32,6 +35,9 @@ export interface CameraCaptureConfig {
   streamingBitrate?: string;
   audioSyncOffsetMs?: number;
   recordingEnabled?: boolean;
+  switchableRecording?: boolean;
+  /** Diagnostic outputs are burned into both recording and transport frames. */
+  outputMode?: "production" | "diagnostic";
   overlays?: Array<{ imagePath: string; position: "top-left" | "top-right" | "bottom-left" | "bottom-right"; offsetX: number; offsetY: number }>;
 }
 
@@ -70,6 +76,22 @@ export class CameraCapture {
     bitrateKbps: number | null; outTimeMs: number | null;
   } | null = null;
 private recordingPath: string | null = null;
+private recordingTap: SwitchableRecording | null = null;
+
+get supportsRecordingSwitch(): boolean { return this.recordingTap !== null; }
+async startRecordingOutput(directory: string, onExit: (path: string, success: boolean, detail: string) => void): Promise<string> {
+  if (!this.isRunning || !this.recordingTap) throw new Error("Independent recording is not available for this capture.");
+  const first = await this.recordingTap.start(directory, (path, success, detail) => {
+    if (this.recordingPath === path) this.recordingPath = null;
+    onExit(path, success, detail);
+  });
+  this.recordingPath = first;
+  return first;
+}
+async stopRecordingOutput(): Promise<void> {
+  if (!this.recordingTap) throw new Error("Independent recording is not available for this capture.");
+  await this.recordingTap.stop();
+}
 private exitListeners = new Set<() => void>();
 
 onExit(listener: () => void): () => void {
@@ -100,10 +122,21 @@ onExit(listener: () => void): () => void {
     this.recordingPath = outputPath.replace(/\.mkv$/, "_0000.mkv");
     this.segmentPattern = outputPath.replace(/\.mkv$/, "_%04d.mkv");
 
+    const dynamicRecording = config.switchableRecording === true && config.outputMode !== "diagnostic";
+    let recordingTransport: string | null = null;
+    if (dynamicRecording) {
+      this.recordingTap = new SwitchableRecording();
+      recordingTransport = await this.recordingTap.listen();
+      // The recording-quality encoder stays live, but its output is discarded
+      // until a separate disk sink is attached. No second camera open.
+      config = { ...config, recordingEnabled: true };
+    }
     const audioSyncOffsetMs = config.audioSyncOffsetMs ?? -300;
     const audioSyncFilter = `asetpts=PTS${audioSyncOffsetMs < 0 ? "-" : "+"}${Math.abs(audioSyncOffsetMs) / 1000}/TB`;
 
     const overlays = (config.overlays ?? []).slice(0, 4);
+    const diagnostic = config.outputMode === "diagnostic";
+    const diagnosticFilter = diagnostic ? diagnosticVideoFilter() : null;
     const overlayFilters = overlays.length ? (() => {
       const filters: string[] = [config.recordingEnabled === false ? "[0:v]split=2[prev0][stream0]" : "[0:v]split=3[rec0][prev0][stream0]"];
       overlays.forEach((overlay, i) => {
@@ -115,8 +148,12 @@ onExit(listener: () => void): () => void {
           filters.push(`[${branch}${i}][img${i}${suffix}]overlay=x=${x}:y=${y}:shortest=0:eof_action=repeat[${branch}${i + 1}]`);
         }
       });
+      if (diagnosticFilter) {
+        if (config.recordingEnabled !== false) filters.push(`[rec${overlays.length}]${diagnosticFilter}[recdiag]`);
+        filters.push(`[stream${overlays.length}]${diagnosticFilter}[streamdiag]`);
+      }
       filters.push(`[prev${overlays.length}]fps=5,scale=640:360,freezedetect=n=-50dB:d=12[prevvid]`);
-      filters.push(`[stream${overlays.length}]fps=${streamFps}[streamvid]`);
+      filters.push(`[${diagnosticFilter ? "streamdiag" : `stream${overlays.length}`}]fps=${streamFps}[streamvid]`);
       return filters.join(";");
     })() : null;
 
@@ -140,7 +177,8 @@ onExit(listener: () => void): () => void {
         : ["-loop", "1", "-framerate", "1", "-i", overlay.imagePath]),
       ...(overlayFilters ? ["-filter_complex", overlayFilters] : []),
       ...(config.recordingEnabled === false ? [] : [
-      "-map", overlays.length ? `[rec${overlays.length}]` : "0:v:0",
+      "-map", overlays.length ? (diagnostic ? "[recdiag]" : `[rec${overlays.length}]`) : "0:v:0",
+      ...(!overlays.length && diagnosticFilter ? ["-vf", diagnosticFilter] : []),
       "-map", "0:a:0",
       "-c:v", "h264_nvenc",
       "-preset", "p4",
@@ -149,12 +187,11 @@ onExit(listener: () => void): () => void {
       "-af", audioSyncFilter,
       "-c:a", "aac",
       "-b:a", "192k",
-      "-force_key_frames", "expr:gte(t,n_forced*300)",
-      "-f", "segment",
-      "-segment_time", "300",
-      "-segment_format", "matroska",
-      "-reset_timestamps", "1",
-      this.segmentPattern!,
+      ...(recordingTransport ? ["-g", String(Math.max(1, Math.round((config.inputFps || captureFps) * 2))), "-forced-idr", "1",
+        "-f", "mpegts", "-mpegts_flags", "+resend_headers", recordingTransport] : [
+        "-force_key_frames", "expr:gte(t,n_forced*300)", "-f", "segment", "-segment_time", "300",
+        "-segment_format", "matroska", "-reset_timestamps", "1", this.segmentPattern!
+      ]),
       ]),
 
       "-map", overlays.length ? "[prevvid]" : "0:v:0",
@@ -167,7 +204,7 @@ onExit(listener: () => void): () => void {
       // Input is MJPEG, so stream copy would NOT produce YouTube-compatible H.264.
       "-map", overlays.length ? "[streamvid]" : "0:v:0",
       "-map", "0:a:0",
-      ...(!overlays.length ? ["-vf", `fps=${streamFps}`] : []),
+      ...(!overlays.length ? ["-vf", diagnosticFilter ? `${diagnosticFilter},fps=${streamFps}` : `fps=${streamFps}`] : []),
       "-c:v", "h264_nvenc",
       "-preset", "p4",
       "-b:v", config.streamingBitrate || streamingBitrate,
@@ -213,6 +250,7 @@ onExit(listener: () => void): () => void {
     );
 
     this.process = ffmpeg;
+    guardFfmpegPipes(ffmpeg, error => console.warn("Shared capture pipe failure:", error.message));
 
     ffmpeg.stdout.on("data", (chunk: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, chunk]);
@@ -351,6 +389,8 @@ this.buffer = Buffer.alloc(0);
 this.latestFrame = null;
 this.lastFrameAt = null;
 
+  this.recordingTap?.dispose();
+  this.recordingTap = null;
   console.log("Shared camera capture stopped.");
 
   for (const listener of this.exitListeners) {
@@ -367,7 +407,9 @@ this.lastFrameAt = null;
       console.error("Shared capture error:", error.message);
     });
 
-    return this.recordingPath;
+    const initialPath = this.recordingPath!;
+    if (dynamicRecording || config.recordingEnabled === false) this.recordingPath = null;
+    return initialPath;
   }
 
   getSignalDiagnostics() {
@@ -483,7 +525,7 @@ async waitUntilReady(timeoutMs = 10000): Promise<void> {
 async stop(): Promise<void> {
   if (this.stopInFlight) return this.stopInFlight;
   const ffmpeg = this.process;
-  if (!ffmpeg) return;
+  if (!ffmpeg) { this.recordingTap?.dispose(); this.recordingTap = null; return; }
 
   const stopping = new Promise<void>((resolve, reject) => {
     let finished = false;

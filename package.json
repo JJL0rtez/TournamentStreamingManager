@@ -31,7 +31,12 @@
     "test:recording-verify": "node --import tsx --test tests/recording-verify.test.mts",
     "recording:verify": "node --import tsx scripts/recording-verify.mts",
     "recording:deep": "node --import tsx scripts/recording-deep.mts",
-    "test:recording-deep": "node --import tsx --test tests/recording-deep.test.mts"
+    "test:recording-deep": "node --import tsx --test tests/recording-deep.test.mts",
+    "test:all": "node scripts/run-all-tests.mjs",
+    "observer:playback": "node tools/youtube-playback-observer.mjs",
+    "release:check": "node tools/tournament-release-check.mjs",
+    "release:workflow": "node tools/tournament-release-workflow.mjs",
+    "test:browser": "npm --prefix browser-tests test"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
